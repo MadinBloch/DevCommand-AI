@@ -12,8 +12,8 @@ import { createPlan } from "./planner.js";
 declare module "express-session" { interface SessionData { githubAccessToken?: string; githubUser?: {id:number;login:string;avatar_url?:string}; oauthState?:string } }
 const prod=process.env.NODE_ENV==="production";
 if (prod || process.env.PORT === "10000") {
-  console.log("Applying Prisma migrations before starting DevCommand API...");
-  execFileSync("npx", ["prisma", "migrate", "deploy"], { stdio: "inherit" });
+  console.log("Preparing Prisma database schema...");
+  execFileSync("npx", ["prisma", "db", "push", "--skip-generate"], { stdio: "inherit" });
 }
 const app=express(), prisma=new PrismaClient(), port=Number(process.env.PORT||4000);
 const PgSession=connectPgSimple(session); app.set("trust proxy",1); app.use(helmet()); app.use(cors({origin:process.env.APP_ORIGIN||"http://localhost:5173",credentials:true})); app.use(express.json({limit:"100kb"}));
