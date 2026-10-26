@@ -4,11 +4,12 @@ services:
     runtime: node
     plan: free
     region: singapore
+    branch: main
     rootDir: backend
     buildCommand: npm install && npm run prisma:generate && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
-    autoDeploy: false
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
@@ -35,9 +36,13 @@ services:
   - type: web
     name: devcommand-ai-web
     runtime: static
+    plan: free
+    region: singapore
+    branch: main
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    autoDeploy: true
     envVars:
       - key: VITE_API_BASE_URL
         sync: false
