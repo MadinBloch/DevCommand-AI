@@ -1,4 +1,700 @@
-import { useState } from "react";
-import { Github, ShieldCheck, GitBranch, Bot, ClipboardList } from "lucide-react";
-const API=(import.meta as any).env.VITE_API_BASE_URL || "http://localhost:4000";
-export default function App(){const [prompt,setPrompt]=useState("");const [title,setTitle]=useState("");const [repo,setRepo]=useState("");const [error,setError]=useState("");const [user,setUser]=useState<any>(null);const [repos,setRepos]=useState<any[]>([]);const [tasks,setTasks]=useState<any[]>([]);async function load(){setError("");try{const m=await fetch(API+"/api/auth/me",{credentials:"include"}).then(r=>r.json());setUser(m.user);if(m.user){const rr=await fetch(API+"/api/github/repos",{credentials:"include"}).then(r=>r.json());setRepos(rr);if(rr[0])setRepo(rr[0].fullName);const tt=await fetch(API+"/api/tasks",{credentials:"include"}).then(r=>r.json());if(Array.isArray(tt))setTasks(tt);}}catch{setError("API unavailable. Configure VITE_API_BASE_URL and backend environment variables.");}}function login(){location.href=API+"/api/auth/github"}async function create(e:any){e.preventDefault();setError("");try{const r=await fetch(API+"/api/tasks",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({repoFullName:repo,title,prompt})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Could not create task");setTasks([d.task,...tasks]);setPrompt("");setTitle("");}catch(e:any){setError(e.message)}}return <div className="app"><aside><div className="brand"><span className="logo">DC</span><div><b>DevCommand AI</b><small>CODING MANAGER</small></div></div><p className="label">WORKSPACE</p><div className="nav active"><ClipboardList size={17}/> Task manager</div><div className="nav"><GitBranch size={17}/> Repositories</div><div className="nav"><Bot size={17}/> Agent orchestration</div><div className="guard"><ShieldCheck size={18}/><div><b>Human approval required</b><p>No automatic merges to main.</p></div></div><div className="bottom">MVP · No paid AI API configured</div></aside><main><header><div><small>YOUR ENGINEERING WORKSPACE</small><h1>Build with a plan.</h1></div><button className="outline" onClick={load}>Refresh</button></header><section className="hero"><div><small>REPOSITORY-AWARE WORKFLOW</small><h2>Turn ideas into <em>reviewable work.</em></h2><p>Describe the change. DevCommand creates a structured plan while keeping execution and merge approval under your control.</p><button onClick={user?load:login}><Github size={17}/>{user?"Refresh GitHub repositories":"Continue with GitHub"}</button></div><div className="heroIcon"><Bot size={58}/><span>PLAN → REVIEW → APPROVE</span></div></section>{error&&<div className="error">{error}</div>}<section className="grid"><article className="panel"><small>NEW WORK ITEM</small><h2>Create a task</h2><p>Connect GitHub, choose a repository and describe the result you want.</p>{user?<form onSubmit={create}><label>Repository</label><select value={repo} onChange={e=>setRepo(e.target.value)} required>{repos.map(r=><option key={r.id} value={r.fullName}>{r.fullName}</option>)}</select><label>Task title</label><input value={title} onChange={e=>setTitle(e.target.value)} minLength={3} maxLength={120} required placeholder="Improve authentication flow"/><label>What should change?</label><textarea value={prompt} onChange={e=>setPrompt(e.target.value)} minLength={10} maxLength={12000} required rows={5} placeholder="Describe goals, constraints, acceptance criteria..."/><button type="submit">Generate plan</button></form>:<button onClick={login}><Github size={16}/> Sign in to start</button>}</article><article className="panel"><small>SAFE DEFAULTS</small><h2>Human-led, agent-ready</h2>{[["01","Inspect before editing"],["02","Bounded implementation plan"],["03","Regression tests and evidence"],["04","Independent review + approval"]].map(x=><div className="step" key={x[0]}><b>{x[0]}</b><span>{x[1]}</span></div>)}<div className="warning">Agent execution adapters are not connected yet. Task creation currently generates a plan only.</div></article></section><section className="panel"><small>RECENT TASKS</small><h2>Task history</h2>{tasks.length?tasks.map(t=><div className="task" key={t.id}><b>{t.title}</b><span>{t.repoFullName} · {t.status}</span></div>):<p>No tasks created yet. Sign in with GitHub to begin.</p>}</section><footer>DEVCOMMAND AI · HUMAN APPROVAL ALWAYS <span>● SAFE MERGE POLICY</span></footer></main></div>}
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Bot,
+  CheckCircle2,
+  ClipboardList,
+  Copy,
+  GitBranch,
+  Github,
+  LayoutDashboard,
+  Loader2,
+  LogOut,
+  Play,
+  RefreshCw,
+  Rocket,
+  ShieldCheck,
+  Sparkles,
+  Workflow,
+} from "lucide-react";
+import {
+  api,
+  type AgentInfo,
+  type FeatureRun,
+  type FeatureRunDetail,
+  type Repo,
+  type SubTask,
+  type User,
+} from "./api";
+
+type View = "home" | "runs" | "run" | "agents" | "repos";
+
+const STATUS_LABEL: Record<string, string> = {
+  queued: "Queued",
+  scanning: "Scanning repo",
+  planning: "Planning",
+  running: "Running agents",
+  reviewing: "Opening PR",
+  testing: "Testing",
+  awaiting_approval: "Awaiting approval",
+  deploying: "Deploying",
+  done: "Done",
+  failed: "Failed",
+  ready: "Ready",
+  needs_followup: "Needs follow-up",
+  skipped: "Skipped",
+};
+
+function statusClass(s: string) {
+  if (s === "done") return "ok";
+  if (s === "failed") return "bad";
+  if (s === "awaiting_approval" || s === "needs_followup") return "warn";
+  if (["running", "scanning", "planning", "testing", "deploying", "reviewing"].includes(s)) return "live";
+  return "mute";
+}
+
+export default function App() {
+  const [view, setView] = useState<View>("home");
+  const [user, setUser] = useState<User | null>(null);
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [runs, setRuns] = useState<FeatureRun[]>([]);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [agentMode, setAgentMode] = useState("manual");
+  const [llmPlanner, setLlmPlanner] = useState(false);
+  const [activeRun, setActiveRun] = useState<FeatureRunDetail | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const [repo, setRepo] = useState("");
+  const [title, setTitle] = useState("");
+  const [goal, setGoal] = useState("");
+
+  async function bootstrap() {
+    setLoading(true);
+    setError("");
+    try {
+      const [{ user: u }, ag] = await Promise.all([api.me(), api.agents()]);
+      setUser(u);
+      setAgents(ag.agents);
+      setAgentMode(ag.mode);
+      setLlmPlanner(ag.llmPlanner);
+      if (u) {
+        const [rr, rn] = await Promise.all([api.repos(), api.runs()]);
+        setRepos(rr);
+        setRuns(rn);
+        if (!repo && rr[0]) setRepo(rr[0].fullName);
+      }
+    } catch (e: any) {
+      setError(e.message || "API unavailable");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void bootstrap();
+  }, []);
+
+  useEffect(() => {
+    if (!activeRun || !["queued", "scanning", "planning", "running", "testing", "reviewing", "deploying"].includes(activeRun.status))
+      return;
+    const t = setInterval(async () => {
+      try {
+        const r = await api.run(activeRun.id);
+        setActiveRun(r);
+        setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...r } : x)));
+      } catch {
+        /* ignore poll errors */
+      }
+    }, 2500);
+    return () => clearInterval(t);
+  }, [activeRun?.id, activeRun?.status]);
+
+  async function openRun(id: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await api.run(id);
+      setActiveRun(r);
+      setView("run");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createRun(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const { run } = await api.createRun({ repoFullName: repo, title, goal, autoStart: true });
+      setTitle("");
+      setGoal("");
+      setRuns((prev) => [run, ...prev]);
+      setActiveRun(run);
+      setView("run");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logout() {
+    await api.logout();
+    setUser(null);
+    setRepos([]);
+    setRuns([]);
+    setActiveRun(null);
+    setView("home");
+  }
+
+  if (loading) {
+    return (
+      <div className="boot">
+        <Loader2 className="spin" size={28} />
+        <p>Loading DevCommand…</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage error={error} onRetry={bootstrap} />;
+  }
+
+  return (
+    <div className="shell">
+      <aside className="side">
+        <div className="brand">
+          <span className="mark">DC</span>
+          <div>
+            <strong>DevCommand</strong>
+            <em>AI ORCHESTRATOR</em>
+          </div>
+        </div>
+
+        <p className="eyebrow">Workspace</p>
+        <nav>
+          <NavBtn active={view === "home"} onClick={() => setView("home")} icon={<LayoutDashboard size={16} />} label="Command center" />
+          <NavBtn active={view === "runs" || view === "run"} onClick={() => setView("runs")} icon={<Workflow size={16} />} label="Feature runs" />
+          <NavBtn active={view === "repos"} onClick={() => setView("repos")} icon={<GitBranch size={16} />} label="Repositories" />
+          <NavBtn active={view === "agents"} onClick={() => setView("agents")} icon={<Bot size={16} />} label="Agents" />
+        </nav>
+
+        <div className="side-card">
+          <ShieldCheck size={18} />
+          <div>
+            <b>Human gate</b>
+            <p>Merge & deploy only after your approval.</p>
+          </div>
+        </div>
+
+        <div className="user-chip">
+          {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span className="av">{user.login[0]}</span>}
+          <div>
+            <b>{user.name || user.login}</b>
+            <span>@{user.login}</span>
+          </div>
+          <button className="ghost icon" title="Sign out" onClick={logout}>
+            <LogOut size={15} />
+          </button>
+        </div>
+      </aside>
+
+      <main className="main">
+        <header className="top">
+          <div>
+            <p className="eyebrow">DevCommand AI</p>
+            <h1>
+              {view === "home" && "Command center"}
+              {view === "runs" && "Feature runs"}
+              {view === "run" && (activeRun?.title || "Run detail")}
+              {view === "repos" && "Repositories"}
+              {view === "agents" && "Agent registry"}
+            </h1>
+          </div>
+          <div className="top-actions">
+            <span className={`pill ${agentMode === "simulate" ? "live" : "mute"}`}>mode · {agentMode}</span>
+            <button className="ghost" onClick={bootstrap}>
+              <RefreshCw size={15} /> Refresh
+            </button>
+          </div>
+        </header>
+
+        {error && <div className="banner bad">{error}</div>}
+
+        {view === "home" && (
+          <HomeView
+            user={user}
+            runs={runs}
+            repos={repos}
+            repo={repo}
+            setRepo={setRepo}
+            title={title}
+            setTitle={setTitle}
+            goal={goal}
+            setGoal={setGoal}
+            busy={busy}
+            llmPlanner={llmPlanner}
+            onCreate={createRun}
+            onOpen={openRun}
+          />
+        )}
+        {view === "runs" && <RunsList runs={runs} onOpen={openRun} />}
+        {view === "run" && activeRun && (
+          <RunDetail
+            run={activeRun}
+            busy={busy}
+            setBusy={setBusy}
+            setError={setError}
+            onUpdate={(r) => {
+              setActiveRun(r);
+              setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...r } : x)));
+            }}
+          />
+        )}
+        {view === "repos" && <ReposView repos={repos} />}
+        {view === "agents" && <AgentsView agents={agents} mode={agentMode} llmPlanner={llmPlanner} />}
+      </main>
+    </div>
+  );
+}
+
+function LoginPage({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return (
+    <div className="login">
+      <div className="login-bg" />
+      <div className="login-panel">
+        <div className="brand big">
+          <span className="mark">DC</span>
+          <div>
+            <strong>DevCommand AI</strong>
+            <em>ORCHESTRATE · ASSIGN · SHIP</em>
+          </div>
+        </div>
+        <h1>One goal. Multiple agents. Your approval.</h1>
+        <p>
+          Sign in with GitHub, pick a repo, describe the feature. DevCommand scans the codebase, splits work,
+          generates agent prompts, supervises progress, then waits for you before deploy.
+        </p>
+        <ul className="login-steps">
+          <li>
+            <Sparkles size={16} /> Scan repo & plan
+          </li>
+          <li>
+            <Bot size={16} /> Assign Codex / Antigravity
+          </li>
+          <li>
+            <Rocket size={16} /> Test, approve, deploy
+          </li>
+        </ul>
+        {error && <div className="banner bad">{error}</div>}
+        <button className="primary lg" onClick={() => (location.href = api.loginUrl())}>
+          <Github size={18} /> Continue with GitHub
+        </button>
+        <button className="ghost" onClick={onRetry}>
+          Check API connection
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NavBtn({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+}) {
+  return (
+    <button className={`nav ${active ? "active" : ""}`} onClick={onClick}>
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function HomeView(props: {
+  user: User;
+  runs: FeatureRun[];
+  repos: Repo[];
+  repo: string;
+  setRepo: (v: string) => void;
+  title: string;
+  setTitle: (v: string) => void;
+  goal: string;
+  setGoal: (v: string) => void;
+  busy: boolean;
+  llmPlanner: boolean;
+  onCreate: (e: FormEvent) => void;
+  onOpen: (id: string) => void;
+}) {
+  const writable = props.repos.filter((r) => r.permissions.push || r.permissions.admin);
+  return (
+    <div className="stack">
+      <section className="hero-band">
+        <div>
+          <p className="eyebrow">Signed in as @{props.user.login}</p>
+          <h2>
+            Describe the feature. <span>We orchestrate the rest.</span>
+          </h2>
+          <p>
+            Repo scan → task split → auto prompts → multi-agent assign → follow-ups → tests → human approve →
+            deploy gate.
+          </p>
+        </div>
+        <div className="phase-rail">
+          {["Scan", "Plan", "Assign", "Supervise", "Test", "Deploy"].map((p, i) => (
+            <div key={p} className="phase">
+              <b>0{i + 1}</b>
+              <span>{p}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="split">
+        <form className="surface form" onSubmit={props.onCreate}>
+          <p className="eyebrow">New feature run</p>
+          <h3>Start orchestration</h3>
+          <label>Repository</label>
+          <select value={props.repo} onChange={(e) => props.setRepo(e.target.value)} required>
+            {writable.map((r) => (
+              <option key={r.id} value={r.fullName}>
+                {r.fullName}
+                {r.language ? ` · ${r.language}` : ""}
+              </option>
+            ))}
+          </select>
+          <label>Title</label>
+          <input
+            value={props.title}
+            onChange={(e) => props.setTitle(e.target.value)}
+            minLength={3}
+            maxLength={120}
+            required
+            placeholder="Add team invites to settings"
+          />
+          <label>Goal (plain language)</label>
+          <textarea
+            value={props.goal}
+            onChange={(e) => props.setGoal(e.target.value)}
+            minLength={10}
+            maxLength={12000}
+            required
+            rows={5}
+            placeholder="In this repo, update the feature so users can invite teammates from settings. Keep existing auth. Add tests."
+          />
+          <p className="hint">
+            {props.llmPlanner
+              ? "LLM planner enabled — plans use your API key when available."
+              : "Heuristic planner active (optional: set OPENAI_API_KEY for smarter plans)."}
+          </p>
+          <button className="primary" type="submit" disabled={props.busy || !writable.length}>
+            {props.busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
+            Scan, plan & assign
+          </button>
+        </form>
+
+        <div className="surface">
+          <p className="eyebrow">Recent runs</p>
+          <h3>Activity</h3>
+          {props.runs.length === 0 ? (
+            <p className="empty">No feature runs yet. Create your first goal on the left.</p>
+          ) : (
+            <ul className="run-list">
+              {props.runs.slice(0, 6).map((r) => (
+                <li key={r.id}>
+                  <button onClick={() => props.onOpen(r.id)}>
+                    <div>
+                      <b>{r.title}</b>
+                      <span>
+                        {r.repoFullName} · {STATUS_LABEL[r.status] || r.status}
+                      </span>
+                    </div>
+                    <em className={`dot ${statusClass(r.status)}`} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RunsList({ runs, onOpen }: { runs: FeatureRun[]; onOpen: (id: string) => void }) {
+  return (
+    <div className="surface">
+      <p className="eyebrow">All runs</p>
+      <h3>Feature orchestration history</h3>
+      {!runs.length ? (
+        <p className="empty">Nothing here yet.</p>
+      ) : (
+        <ul className="run-list dense">
+          {runs.map((r) => {
+            const done = r.subTasks?.filter((s) => s.status === "done").length || 0;
+            const total = r.subTasks?.length || 0;
+            return (
+              <li key={r.id}>
+                <button onClick={() => onOpen(r.id)}>
+                  <div>
+                    <b>{r.title}</b>
+                    <span>
+                      {r.repoFullName} · {done}/{total} tasks · {STATUS_LABEL[r.status] || r.status}
+                    </span>
+                  </div>
+                  <em className={`dot ${statusClass(r.status)}`} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function RunDetail({
+  run,
+  busy,
+  setBusy,
+  setError,
+  onUpdate,
+}: {
+  run: FeatureRunDetail;
+  busy: boolean;
+  setBusy: (v: boolean) => void;
+  setError: (v: string) => void;
+  onUpdate: (r: FeatureRunDetail) => void;
+}) {
+  const [expanded, setExpanded] = useState<string | null>(run.subTasks[0]?.id || null);
+  const scan = run.scanJson as any;
+
+  async function act(fn: () => Promise<{ run: FeatureRunDetail }>) {
+    setBusy(true);
+    setError("");
+    try {
+      const { run: next } = await fn();
+      onUpdate(next);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <section className="surface run-head">
+        <div>
+          <p className="eyebrow">{run.repoFullName}</p>
+          <h2>{run.title}</h2>
+          <p className="goal">{run.goal}</p>
+          <div className="meta-row">
+            <span className={`pill ${statusClass(run.status)}`}>{STATUS_LABEL[run.status] || run.status}</span>
+            {run.branchName && <span className="pill mute">branch · {run.branchName}</span>}
+            {run.prUrl && (
+              <a className="pill live" href={run.prUrl} target="_blank" rel="noreferrer">
+                Pull request
+              </a>
+            )}
+            {run.deployUrl && (
+              <a className="pill mute" href={run.deployUrl} target="_blank" rel="noreferrer">
+                Deploy target
+              </a>
+            )}
+          </div>
+          {run.errorMessage && <div className="banner warn">{run.errorMessage}</div>}
+          {run.testSummary && (
+            <div className="banner mute">
+              <b>Test summary</b>
+              <pre>{run.testSummary}</pre>
+            </div>
+          )}
+        </div>
+        <div className="run-actions">
+          {["queued", "failed"].includes(run.status) && (
+            <button className="primary" disabled={busy} onClick={() => act(() => api.startRun(run.id))}>
+              <Play size={16} /> Restart pipeline
+            </button>
+          )}
+          {run.status === "awaiting_approval" && (
+            <>
+              <button className="primary" disabled={busy} onClick={() => act(() => api.approveRun(run.id, false))}>
+                <CheckCircle2 size={16} /> Approve (no merge)
+              </button>
+              <button className="ghost" disabled={busy} onClick={() => act(() => api.approveRun(run.id, true))}>
+                <Rocket size={16} /> Approve & merge PR
+              </button>
+            </>
+          )}
+        </div>
+      </section>
+
+      {scan?.summary && (
+        <section className="surface">
+          <p className="eyebrow">Repo scan</p>
+          <h3>Context used for planning</h3>
+          <p>{scan.summary}</p>
+          {!!scan.relevantFiles?.length && (
+            <div className="chips">
+              {scan.relevantFiles.slice(0, 12).map((f: string) => (
+                <span key={f}>{f}</span>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      <section className="surface">
+        <p className="eyebrow">Sub-tasks</p>
+        <h3>Assigned workboard</h3>
+        <div className="board">
+          {run.subTasks.map((st) => (
+            <SubTaskCard
+              key={st.id}
+              st={st}
+              open={expanded === st.id}
+              onToggle={() => setExpanded(expanded === st.id ? null : st.id)}
+              busy={busy}
+              onRetry={() => act(() => api.retrySubTask(st.id))}
+              onComplete={() => act(() => api.completeManual(st.id))}
+            />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SubTaskCard({
+  st,
+  open,
+  onToggle,
+  busy,
+  onRetry,
+  onComplete,
+}: {
+  st: SubTask;
+  open: boolean;
+  onToggle: () => void;
+  busy: boolean;
+  onRetry: () => void;
+  onComplete: () => void;
+}) {
+  return (
+    <article className={`task-card ${statusClass(st.status)}`}>
+      <button className="task-head" onClick={onToggle}>
+        <div>
+          <span className="agent-tag">{st.agent}</span>
+          <b>
+            {st.orderIndex + 1}. {st.title}
+          </b>
+          <span>{STATUS_LABEL[st.status] || st.status}</span>
+        </div>
+        <em className={`dot ${statusClass(st.status)}`} />
+      </button>
+      {open && (
+        <div className="task-body">
+          <p>{st.objective}</p>
+          <p className="eyebrow">Generated prompt</p>
+          <pre className="prompt">{st.generatedPrompt}</pre>
+          <div className="row">
+            <button
+              className="ghost"
+              type="button"
+              onClick={() => navigator.clipboard.writeText(st.followUpPrompt || st.generatedPrompt)}
+            >
+              <Copy size={14} /> Copy prompt
+            </button>
+            {["failed", "needs_followup"].includes(st.status) && (
+              <button className="ghost" disabled={busy} onClick={onRetry}>
+                <RefreshCw size={14} /> Retry
+              </button>
+            )}
+            {st.status !== "done" && (
+              <button className="ghost" disabled={busy} onClick={onComplete}>
+                <ClipboardList size={14} /> Mark done
+              </button>
+            )}
+          </div>
+          {st.logs && (
+            <>
+              <p className="eyebrow">Logs</p>
+              <pre className="logs">{st.logs}</pre>
+            </>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ReposView({ repos }: { repos: Repo[] }) {
+  const list = repos.filter((r) => r.permissions.push || r.permissions.admin);
+  return (
+    <div className="surface">
+      <p className="eyebrow">Writable repositories</p>
+      <h3>{list.length} repos you can orchestrate</h3>
+      <ul className="repo-grid">
+        {list.map((r) => (
+          <li key={r.id}>
+            <a href={r.htmlUrl} target="_blank" rel="noreferrer">
+              <b>{r.fullName}</b>
+              <span>
+                {r.language || "n/a"} · {r.defaultBranch}
+                {r.private ? " · private" : ""}
+              </span>
+              <p>{r.description || "No description"}</p>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AgentsView({
+  agents,
+  mode,
+  llmPlanner,
+}: {
+  agents: AgentInfo[];
+  mode: string;
+  llmPlanner: boolean;
+}) {
+  return (
+    <div className="stack">
+      <div className="surface">
+        <p className="eyebrow">Runtime</p>
+        <h3>Orchestration settings</h3>
+        <p>
+          Agent mode: <b>{mode}</b>. LLM planner: <b>{llmPlanner ? "on" : "off"}</b>.
+        </p>
+        <p className="hint">
+          Use <code>AGENT_MODE=simulate</code> for local end-to-end demos. Point{" "}
+          <code>ANTIGRAVITY_API_URL</code> / <code>CODEX_API_URL</code> at real adapters when ready.
+        </p>
+      </div>
+      <div className="agent-grid">
+        {agents.map((a) => (
+          <div key={a.name} className={`surface agent ${a.available ? "ok" : "mute"}`}>
+            <Bot size={22} />
+            <b>{a.name}</b>
+            <span className={`pill ${a.available ? "ok" : "mute"}`}>{a.available ? "available" : "unavailable"}</span>
+            {a.reason && <p>{a.reason}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

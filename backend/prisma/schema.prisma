@@ -1,22 +1,91 @@
 generator client {
   provider = "prisma-client-js"
 }
+
 datasource db {
   provider = "postgresql"
-  url = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
 }
+
+model User {
+  id          String       @id
+  githubId    Int          @unique
+  login       String
+  name        String?
+  avatarUrl   String?
+  email       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  featureRuns FeatureRun[]
+  tasks       Task[]
+}
+
 model Task {
-  id String @id @default(cuid())
-  userId String
-  repoFullName String
-  title String
-  prompt String @db.Text
-  status String @default("planned")
-  planJson Json
-  assignedAgent String @default("unassigned")
-  approvalStatus String @default("not_required")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repoFullName   String
+  title          String
+  prompt         String   @db.Text
+  status         String   @default("planned")
+  planJson       Json
+  assignedAgent  String   @default("unassigned")
+  approvalStatus String   @default("not_required")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
   @@index([userId, createdAt])
   @@index([repoFullName])
+}
+
+model FeatureRun {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repoFullName  String
+  title         String
+  goal          String    @db.Text
+  status        String    @default("queued")
+  scanJson      Json?
+  branchName    String?
+  prUrl         String?
+  prNumber      Int?
+  deployUrl     String?
+  testSummary   String?   @db.Text
+  errorMessage  String?   @db.Text
+  approvedAt    DateTime?
+  approvedBy    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  subTasks      SubTask[]
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([repoFullName])
+}
+
+model SubTask {
+  id              String     @id @default(cuid())
+  featureRunId    String
+  featureRun      FeatureRun @relation(fields: [featureRunId], references: [id], onDelete: Cascade)
+  orderIndex      Int
+  title           String
+  objective       String     @db.Text
+  agent           String
+  generatedPrompt String     @db.Text
+  criteria        Json
+  dependsOn       Json       @default("[]")
+  status          String     @default("queued")
+  attempt         Int        @default(0)
+  maxAttempts     Int        @default(3)
+  logs            String?    @db.Text
+  followUpPrompt  String?    @db.Text
+  resultJson      Json?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([featureRunId, orderIndex])
+  @@index([status])
 }
