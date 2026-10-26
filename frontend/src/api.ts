@@ -1,4 +1,4 @@
-const API = (import.meta as any).env.VITE_API_BASE_URL ;
+const API = ((import.meta as any).env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "";
 
 async function req<T = any>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(API + path, {
