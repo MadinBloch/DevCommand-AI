@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { execFileSync } from "node:child_process";
 import express from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
@@ -9,7 +10,12 @@ import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { createPlan } from "./planner.js";
 declare module "express-session" { interface SessionData { githubAccessToken?: string; githubUser?: {id:number;login:string;avatar_url?:string}; oauthState?:string } }
-const app=express(), prisma=new PrismaClient(), port=Number(process.env.PORT||4000), prod=process.env.NODE_ENV==="production";
+const prod=process.env.NODE_ENV==="production";
+if (prod || process.env.PORT === "10000") {
+  console.log("Applying Prisma migrations before starting DevCommand API...");
+  execFileSync("npx", ["prisma", "migrate", "deploy"], { stdio: "inherit" });
+}
+const app=express(), prisma=new PrismaClient(), port=Number(process.env.PORT||4000);
 const PgSession=connectPgSimple(session); app.set("trust proxy",1); app.use(helmet()); app.use(cors({origin:process.env.APP_ORIGIN||"http://localhost:5173",credentials:true})); app.use(express.json({limit:"100kb"}));
 app.use(session({store:process.env.DATABASE_URL?new PgSession({conString:process.env.DATABASE_URL,createTableIfMissing:true}):undefined,name:"devcommand.sid",secret:process.env.SESSION_SECRET||"dev-only-change-me",resave:false,saveUninitialized:false,cookie:{httpOnly:true,secure:prod,sameSite:prod?"none":"lax",maxAge:43200000}}));
 const needAuth=(req:express.Request,res:express.Response,next:express.NextFunction)=>{if(!req.session.githubAccessToken||!req.session.githubUser){res.status(401).json({error:"Sign in with GitHub first."});return;}next();};
