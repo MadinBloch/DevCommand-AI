@@ -206,7 +206,7 @@ export default function App() {
       <main className="main">
         <header className="top">
           <div>
-            <p className="eyebrow">DevCommand AI</p>
+            <p className="eyebrow">DevCommand AI Madin</p>
             <h1>
               {view === "home" && "Command center"}
               {view === "runs" && "Feature runs"}
