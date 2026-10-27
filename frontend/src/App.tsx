@@ -155,7 +155,7 @@ export default function App() {
     return (
       <div className="boot">
         <Loader2 className="spin" size={28} />
-        <p>Loading DevCommand…</p>
+        <p>Loading DevCommand… </p>
       </div>
     );
   }
