@@ -1,0 +1,109 @@
+name: CI/CD - DevCommand AI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devcommand-ai-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build backend and frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Generate Prisma client
+        run: npm --prefix backend run prisma:generate
+
+      - name: Build backend
+        run: npm --prefix backend run build
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Build frontend
+        env:
+          VITE_API_BASE_URL: /api
+        run: npm --prefix frontend run build
+
+  deploy:
+    name: Deploy to EC2
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Configure SSH
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          set -eu
+          test -n "$EC2_SSH_KEY" || (echo "Missing GitHub secret EC2_SSH_KEY" && exit 1)
+          test -n "$EC2_HOST" || (echo "Missing GitHub secret EC2_HOST" && exit 1)
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy application and run database migrations
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          set -eu
+          test -n "$EC2_USER" || (echo "Missing GitHub secret EC2_USER" && exit 1)
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$EC2_USER@$EC2_HOST" 'sudo bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /var/www/DevCommand-AI
+
+          # Update tracked source without touching ignored environment files.
+          git fetch origin main
+          git reset --hard origin/main
+
+          # Install exact lockfile dependencies.
+          npm ci --prefix backend
+          npm ci --prefix frontend
+
+          # Generate Prisma client, apply committed migrations, and build.
+          npm --prefix backend run prisma:generate
+          npm --prefix backend run prisma:migrate
+          npm --prefix backend run build
+
+          # Keep the frontend API on the same origin behind Nginx.
+          printf 'VITE_API_BASE_URL=/api\n' > frontend/.env.production
+          npm --prefix frontend run build
+
+          # Restart the existing PM2 app (or create it on first deployment).
+          pm2 restart devcommand-api --update-env || pm2 start dist/server.js --name devcommand-api --cwd /var/www/DevCommand-AI/backend
+          pm2 save
+
+          nginx -t
+          systemctl reload nginx
+          curl --fail --silent --show-error http://127.0.0.1:4000/api/health
+          REMOTE
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
