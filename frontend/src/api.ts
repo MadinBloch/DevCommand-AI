@@ -1,7 +1,15 @@
 const API = ((import.meta as any).env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "";
 
+// Avoid duplicating "/api" when the configured base URL already includes it.
+function apiPath(path: string): string {
+  if (API.endsWith("/api") && path.startsWith("/api/")) {
+    return API + path.slice(4);
+  }
+  return API + path;
+}
+
 async function req<T = any>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(API + path, {
+  const r = await fetch(apiPath(path), {
     credentials: "include",
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
@@ -14,7 +22,7 @@ async function req<T = any>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   base: API,
-  loginUrl: () => API + "/api/auth/github",
+  loginUrl: () => apiPath("/api/auth/github"),
   me: () => req<{ user: User | null }>("/api/auth/me"),
   logout: () => req("/api/auth/logout", { method: "POST" }),
   repos: () => req<Repo[]>("/api/github/repos"),
