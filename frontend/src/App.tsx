@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Badge, Button, Card, Input, Textarea } from "./components/ui";
 import {
   Bot,
   CheckCircle2,
@@ -64,6 +65,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const [repo, setRepo] = useState("");
   const [title, setTitle] = useState("");
@@ -166,21 +168,21 @@ export default function App() {
 
   return (
     <div className="shell">
-      <aside className="side">
+      <aside className={`side ${mobileNavOpen ? "side-open" : ""}`}>
         <div className="brand">
-          <span className="mark">DC</span>
+          <span className="mark" aria-hidden="true">DC</span>
           <div>
             <strong>DevCommand</strong>
-            <em>AI ORCHESTRATOR</em>
+            <em>DEVELOPER WORKSPACE</em>
           </div>
         </div>
 
         <p className="eyebrow">Workspace</p>
-        <nav>
-          <NavBtn active={view === "home"} onClick={() => setView("home")} icon={<LayoutDashboard size={16} />} label="Command center" />
-          <NavBtn active={view === "runs" || view === "run"} onClick={() => setView("runs")} icon={<Workflow size={16} />} label="Feature runs" />
-          <NavBtn active={view === "repos"} onClick={() => setView("repos")} icon={<GitBranch size={16} />} label="Repositories" />
-          <NavBtn active={view === "agents"} onClick={() => setView("agents")} icon={<Bot size={16} />} label="Agents" />
+        <nav aria-label="Workspace navigation">
+          <NavBtn active={view === "home"} onClick={() => { setView("home"); setMobileNavOpen(false); }} icon={<LayoutDashboard size={16} />} label="Command center" />
+          <NavBtn active={view === "runs" || view === "run"} onClick={() => { setView("runs"); setMobileNavOpen(false); }} icon={<Workflow size={16} />} label="Feature runs" />
+          <NavBtn active={view === "repos"} onClick={() => { setView("repos"); setMobileNavOpen(false); }} icon={<GitBranch size={16} />} label="Repositories" />
+          <NavBtn active={view === "agents"} onClick={() => { setView("agents"); setMobileNavOpen(false); }} icon={<Bot size={16} />} label="Agents" />
         </nav>
 
         <div className="side-card">
@@ -197,7 +199,7 @@ export default function App() {
             <b>{user.name || user.login}</b>
             <span>@{user.login}</span>
           </div>
-          <button className="ghost icon" title="Sign out" onClick={logout}>
+          <button className="ghost icon" aria-label="Sign out" title="Sign out" onClick={logout}>
             <LogOut size={15} />
           </button>
         </div>
@@ -206,7 +208,7 @@ export default function App() {
       <main className="main">
         <header className="top">
           <div>
-            <p className="eyebrow">DevCommand AI Madin</p>
+            <p className="eyebrow">Workspace / {view === "run" ? "Feature detail" : view === "home" ? "Overview" : view}</p>
             <h1>
               {view === "home" && "Command center"}
               {view === "runs" && "Feature runs"}
@@ -216,8 +218,8 @@ export default function App() {
             </h1>
           </div>
           <div className="top-actions">
-            <span className={`pill ${agentMode === "simulate" ? "live" : "mute"}`}>mode · {agentMode}</span>
-            <button className="ghost" onClick={bootstrap}>
+            <Badge variant={agentMode === "simulate" ? "outline" : "default"}>Agent mode: {agentMode}{agentMode === "simulate" ? " (demo)" : ""}</Badge>
+            <Button variant="outline" onClick={bootstrap} disabled={loading}>
               <RefreshCw size={15} /> Refresh
             </button>
           </div>
@@ -291,12 +293,12 @@ function LoginPage({ error, onRetry }: { error: string; onRetry: () => void }) {
           </li>
         </ul>
         {error && <div className="banner bad">{error}</div>}
-        <button className="primary lg" onClick={() => (location.href = api.loginUrl())}>
+        <Button className="primary lg" onClick={() => (location.href = api.loginUrl())}>
           <Github size={18} /> Continue with GitHub
-        </button>
-        <button className="ghost" onClick={onRetry}>
+        </Button>
+        <Button variant="outline" onClick={onRetry}>
           Check API connection
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -314,7 +316,7 @@ function NavBtn({
   label: string;
 }) {
   return (
-    <button className={`nav ${active ? "active" : ""}`} onClick={onClick}>
+    <button type="button" aria-current={active ? "page" : undefined} className={`nav ${active ? "active" : ""}`} onClick={onClick}>
       {icon}
       {label}
     </button>
@@ -374,7 +376,8 @@ function HomeView(props: {
             ))}
           </select>
           <label>Title</label>
-          <input
+          <Input
+            aria-label="Feature title"
             value={props.title}
             onChange={(e) => props.setTitle(e.target.value)}
             minLength={3}
@@ -383,7 +386,8 @@ function HomeView(props: {
             placeholder="Add team invites to settings"
           />
           <label>Goal (plain language)</label>
-          <textarea
+          <Textarea
+            aria-label="Feature goal"
             value={props.goal}
             onChange={(e) => props.setGoal(e.target.value)}
             minLength={10}
@@ -397,13 +401,13 @@ function HomeView(props: {
               ? "LLM planner enabled — plans use your API key when available."
               : "Heuristic planner active (optional: set OPENAI_API_KEY for smarter plans)."}
           </p>
-          <button className="primary" type="submit" disabled={props.busy || !writable.length}>
+          <Button type="submit" disabled={props.busy || !writable.length}>
             {props.busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
             Scan, plan & assign
-          </button>
+          </Button>
         </form>
 
-        <div className="surface">
+        <Card className="surface">
           <p className="eyebrow">Recent runs</p>
           <h3>Activity</h3>
           {props.runs.length === 0 ? (
@@ -425,7 +429,7 @@ function HomeView(props: {
               ))}
             </ul>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   );
@@ -433,7 +437,7 @@ function HomeView(props: {
 
 function RunsList({ runs, onOpen }: { runs: FeatureRun[]; onOpen: (id: string) => void }) {
   return (
-    <div className="surface">
+    <Card className="surface">
       <p className="eyebrow">All runs</p>
       <h3>Feature orchestration history</h3>
       {!runs.length ? (
@@ -459,7 +463,7 @@ function RunsList({ runs, onOpen }: { runs: FeatureRun[]; onOpen: (id: string) =
           })}
         </ul>
       )}
-    </div>
+    </Card>
   );
 }
 
