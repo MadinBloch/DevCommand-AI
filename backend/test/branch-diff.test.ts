@@ -16,11 +16,11 @@ test("GitHub compare API checks the actual devcommand feature branch without pai
     return new Response(JSON.stringify({
       ahead_by: 0,
       files: [],
-      head_commit: { sha: "same-head" },
+      commits: [],
     }), { status: 200, headers: { "content-type": "application/json" } });
   });
   const diff = await checkBranchDiff("fixture-only-token", "example/repository", "main", "devcommand/cmvqkh74");
-  assert.deepEqual(diff, { aheadBy: 0, changedFiles: 0, headSha: "same-head" });
+  assert.deepEqual(diff, { aheadBy: 0, changedFiles: 0, headSha: "" });
   assert.equal(hasReviewableChanges(diff), false);
   assert.match(calls[0], /compare\/main\.\.\.devcommand%2Fcmvqkh74/);
 });
@@ -29,7 +29,7 @@ test("GitHub compare API recognizes a branch with a genuine file diff", async (t
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({
     ahead_by: 1,
     files: [{ filename: "src/fix.ts" }],
-    head_commit: { sha: "new-commit" },
+    commits: [{ sha: "new-commit" }],
   }), { status: 200 }));
   const diff = await checkBranchDiff("fixture-only-token", "example/repository", "main", "feature/fix");
   assert.equal(hasReviewableChanges(diff), true);
