@@ -67,7 +67,8 @@ export function RunDetail({
               <Play size={16} /> Restart pipeline
             </button>
           )}
-          {run.status === "awaiting_approval" && (
+          {run.status === "awaiting_approval" && !run.prUrl && <p className="hint" role="status">Coding work is pending. Connect an agent or push commits to your feature branch; PR approval is unavailable until a real PR exists.</p>}
+          {run.status === "awaiting_approval" && Boolean(run.prUrl) && (
             <>
               <button className="primary" disabled={busy} onClick={() => act(() => api.approveRun(run.id, false))}>
                 <CheckCircle2 size={16} /> Approve (no merge)
