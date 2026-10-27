@@ -146,18 +146,9 @@ async function drainSubTasks(runId: string, token: string, scan: RepoScan) {
     }
 
     if (current.agent === "human") {
-      await prisma.subTask.update({
-        where: { id: current.id },
-        data: {
-          status: "needs_followup",
-          logs: (current.logs || "") + "\nWaiting for human approval in UI.",
-          startedAt: current.startedAt || new Date(),
-        },
-      });
-      await prisma.featureRun.update({
-        where: { id: runId },
-        data: { status: "awaiting_approval" },
-      });
+      // Review happens only after a real PR exists. Do not expose approval
+      // actions for an empty branch or before a PR is created.
+      await finishWithPr(runId, token, scan);
       return;
     }
 
