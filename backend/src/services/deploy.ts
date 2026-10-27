@@ -30,11 +30,11 @@ export async function checkBranchDiff(token: string, fullName: string, base: str
   const data = (await gh(
     `/repos/${fullName}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
     token
-  )) as { ahead_by?: number; files?: unknown[]; commits?: unknown[]; merge_base_commit?: unknown; status?: string; head_commit?: { sha?: string } };
+  )) as { ahead_by?: number; files?: unknown[]; commits?: Array<{ sha?: string }>; head_commit?: { sha?: string } };
   return {
     aheadBy: Number(data.ahead_by || 0),
     changedFiles: Array.isArray(data.files) ? data.files.length : 0,
-    headSha: data.head_commit?.sha || "",
+    headSha: data.commits?.at(-1)?.sha || data.head_commit?.sha || "",
   };
 }
 
