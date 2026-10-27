@@ -9,6 +9,7 @@ import {
   Github,
   LayoutDashboard,
   Loader2,
+  Menu,
   LogOut,
   Play,
   RefreshCw,
@@ -218,10 +219,11 @@ export default function App() {
             </h1>
           </div>
           <div className="top-actions">
+            <Button variant="outline" size="icon" className="mobile-toggle" aria-label="Toggle navigation" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((value) => !value)}><Menu size={18}/></Button>
             <Badge variant={agentMode === "simulate" ? "outline" : "default"}>Agent mode: {agentMode}{agentMode === "simulate" ? " (demo)" : ""}</Badge>
             <Button variant="outline" onClick={bootstrap} disabled={loading}>
               <RefreshCw size={15} /> Refresh
-            </button>
+            </Button>
           </div>
         </header>
 
@@ -362,12 +364,18 @@ function HomeView(props: {
         </div>
       </section>
 
+      <section className="metrics-grid" aria-label="Workspace statistics">
+        <Card className="metric-card"><span>Connected repositories</span><strong>{props.repos.length}</strong><small>{writable.length} with write permission</small></Card>
+        <Card className="metric-card"><span>Total feature runs</span><strong>{props.runs.length}</strong><small>From your workspace</small></Card>
+        <Card className="metric-card"><span>Running</span><strong>{props.runs.filter((r) => ["running", "scanning", "planning", "testing", "reviewing"].includes(r.status)).length}</strong><small>Currently in progress</small></Card>
+        <Card className="metric-card"><span>Needs approval</span><strong>{props.runs.filter((r) => r.status === "awaiting_approval").length}</strong><small>Waiting for your decision</small></Card>
+      </section>
       <div className="split">
         <form className="surface form" onSubmit={props.onCreate}>
           <p className="eyebrow">New feature run</p>
           <h3>Start orchestration</h3>
-          <label>Repository</label>
-          <select value={props.repo} onChange={(e) => props.setRepo(e.target.value)} required>
+          <label htmlFor="run-repo">Repository</label>
+          <select id="run-repo" value={props.repo} onChange={(e) => props.setRepo(e.target.value)} required>
             {writable.map((r) => (
               <option key={r.id} value={r.fullName}>
                 {r.fullName}
@@ -375,9 +383,9 @@ function HomeView(props: {
               </option>
             ))}
           </select>
-          <label>Title</label>
+          <label htmlFor="run-title">Title</label>
           <Input
-            aria-label="Feature title"
+            id="run-title" aria-label="Feature title"
             value={props.title}
             onChange={(e) => props.setTitle(e.target.value)}
             minLength={3}
@@ -385,9 +393,9 @@ function HomeView(props: {
             required
             placeholder="Add team invites to settings"
           />
-          <label>Goal (plain language)</label>
+          <label htmlFor="run-goal">Goal (plain language)</label>
           <Textarea
-            aria-label="Feature goal"
+            id="run-goal" aria-label="Feature goal"
             value={props.goal}
             onChange={(e) => props.setGoal(e.target.value)}
             minLength={10}
