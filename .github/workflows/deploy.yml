@@ -106,26 +106,38 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
 
+          if ! swapon --show | grep -q '/swapfile'; then
+            echo "Creating swap file for low-memory EC2 instance..."
+            sudo fallocate -l 2G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+          fi
+
+          export NODE_OPTIONS="--max_old_space_size=1024"
+          export npm_config_cache="/tmp/npm-cache"
+
           echo "Installing backend dependencies..."
-          npm ci --prefix backend
+          npm ci --prefix backend --no-audit --no-fund
 
           echo "Installing frontend dependencies..."
-          npm ci --prefix frontend
+          npm ci --prefix frontend --no-audit --no-fund
 
           echo "Generating Prisma client..."
-          npm --prefix backend run prisma:generate
+          NODE_OPTIONS="$NODE_OPTIONS" npm --prefix backend run prisma:generate
 
           echo "Applying database migrations..."
-          npm --prefix backend run prisma:migrate
+          NODE_OPTIONS="$NODE_OPTIONS" npm --prefix backend run prisma:migrate
 
           echo "Building backend..."
-          npm --prefix backend run build
+          NODE_OPTIONS="$NODE_OPTIONS" npm --prefix backend run build
 
           echo "Configuring frontend API URL..."
           printf 'VITE_API_BASE_URL=/api\n' > frontend/.env.production
 
           echo "Building frontend..."
-          npm --prefix frontend run build
+          NODE_OPTIONS="$NODE_OPTIONS" npm --prefix frontend run build
 
           echo "Restarting backend..."
           if pm2 describe devcommand-api >/dev/null 2>&1; then
@@ -172,4 +184,4 @@ jobs:
       - name: Remove SSH key
         if: always()
         run: rm -f ~/.ssh/deploy_key
-```
+
