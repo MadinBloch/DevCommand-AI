@@ -6,7 +6,7 @@ function simulateWork(input: AgentRunInput): AgentRunResult {
     `[${input.agent}] Repo: ${input.repoFullName} @ ${input.branchName}`,
     `[${input.agent}] Attempt ${input.attempt}`,
     `[${input.agent}] Prompt length: ${input.prompt.length} chars`,
-    `[${input.agent}] Simulated execution completed with checklist verified.`,
+    `[${input.agent}] Simulation only: no files modified, no tests executed, no commits created.`,
   ];
   return {
     success: true,
