@@ -20,3 +20,14 @@
 @media(max-width:1000px){.shell{grid-template-columns:1fr}.side{position:relative;height:auto;gap:8px;padding:13px 18px;border-right:0;border-bottom:1px solid #e4e4e7}.side .brand{padding:3px}.side .eyebrow,.side-card{display:none}.side nav{display:flex;flex-wrap:wrap;gap:3px}.side .nav{width:auto;padding:9px 12px}.side .user-chip{margin-top:0;max-width:260px}.main{padding:24px}.split{grid-template-columns:1fr}}
 @media(max-width:580px){.main{padding:17px 13px 35px}.surface{padding:17px}.top{align-items:flex-start;flex-direction:column;gap:12px}.top-actions{width:100%;justify-content:space-between}.hero-band{padding:24px 19px}.phase{font-size:.69rem}.login{padding:16px}.login-panel{padding:26px 21px}.side .user-chip{max-width:100%}.side nav{overflow-x:auto;flex-wrap:nowrap}.side nav .nav{white-space:nowrap;font-size:.74rem}.repo-grid,.agent-grid{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+
+/* Source-derived overview metrics */
+.metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px}
+.metric-card{padding:21px;display:flex;flex-direction:column;gap:7px;min-width:0}
+.metric-card>span{font-size:.78rem;font-weight:650;color:#71717a}
+.metric-card>strong{font-weight:850;letter-spacing:-.06em;font-size:2rem;line-height:1.15;color:#27272a}
+.metric-card>small{color:#71717a;font-size:.72rem}
+.mobile-toggle{display:none}
+@media(max-width:1100px){.metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1000px){.mobile-toggle{display:inline-flex}.side nav{display:none}.side.side-open nav{display:flex}}
+@media(max-width:580px){.metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.metric-card{padding:15px}.metric-card>strong{font-size:1.7rem}}
