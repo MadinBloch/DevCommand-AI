@@ -23,6 +23,25 @@ export async function ensureFeatureBranch(
   return { sha, branchName };
 }
 
+export type BranchDiff = { aheadBy: number; changedFiles: number; headSha: string };
+
+export async function checkBranchDiff(token: string, fullName: string, base: string, head: string): Promise<BranchDiff> {
+  // GitHub's compare API reports the actual file diff, not merely branch existence.
+  const data = (await gh(
+    `/repos/${fullName}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+    token
+  )) as { ahead_by?: number; files?: unknown[]; commits?: Array<{ sha?: string }>; head_commit?: { sha?: string } };
+  return {
+    aheadBy: Number(data.ahead_by || 0),
+    changedFiles: Array.isArray(data.files) ? data.files.length : 0,
+    headSha: data.commits?.at(-1)?.sha || data.head_commit?.sha || "",
+  };
+}
+
+export function hasReviewableChanges(diff: BranchDiff): boolean {
+  return diff.aheadBy > 0 && diff.changedFiles > 0 && Boolean(diff.headSha);
+}
+
 export async function openPullRequest(opts: {
   token: string;
   fullName: string;

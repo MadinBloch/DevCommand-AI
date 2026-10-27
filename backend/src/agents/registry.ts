@@ -6,7 +6,7 @@ function simulateWork(input: AgentRunInput): AgentRunResult {
     `[${input.agent}] Repo: ${input.repoFullName} @ ${input.branchName}`,
     `[${input.agent}] Attempt ${input.attempt}`,
     `[${input.agent}] Prompt length: ${input.prompt.length} chars`,
-    `[${input.agent}] Simulated execution completed with checklist verified.`,
+    `[${input.agent}] Simulation only: no files modified, no tests executed, no commits created.`,
   ];
   return {
     success: true,
@@ -149,7 +149,14 @@ const adapters: Record<AgentName, AgentAdapter> = {
 export function listAgents() {
   return (Object.keys(adapters) as AgentName[]).map((name) => {
     const a = adapters[name];
-    return { name: a.name, available: a.available, reason: a.reason || null };
+    const simulationOnly = process.env.AGENT_MODE === "simulate" &&
+      ((name === "codex" && !process.env.CODEX_API_URL) ||
+       (name === "antigravity" && !process.env.ANTIGRAVITY_API_URL));
+    return {
+      name: a.name,
+      available: simulationOnly ? false : a.available,
+      reason: simulationOnly ? "Simulation only; no real coding agent connected." : a.reason || null,
+    };
   });
 }
 

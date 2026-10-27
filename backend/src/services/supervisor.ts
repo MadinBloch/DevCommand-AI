@@ -8,6 +8,8 @@ import {
   openPullRequest,
   resolveDeployUrl,
   mergePullRequest,
+  checkBranchDiff,
+  hasReviewableChanges,
 } from "./deploy.js";
 
 type TokenProvider = (userId: string) => string | undefined;
@@ -144,18 +146,9 @@ async function drainSubTasks(runId: string, token: string, scan: RepoScan) {
     }
 
     if (current.agent === "human") {
-      await prisma.subTask.update({
-        where: { id: current.id },
-        data: {
-          status: "needs_followup",
-          logs: (current.logs || "") + "\nWaiting for human approval in UI.",
-          startedAt: current.startedAt || new Date(),
-        },
-      });
-      await prisma.featureRun.update({
-        where: { id: runId },
-        data: { status: "awaiting_approval" },
-      });
+      // Review happens only after a real PR exists. Do not expose approval
+      // actions for an empty branch or before a PR is created.
+      await finishWithPr(runId, token, scan);
       return;
     }
 
@@ -193,21 +186,24 @@ async function drainSubTasks(runId: string, token: string, scan: RepoScan) {
       return;
     }
 
-    if (!result.available && process.env.AGENT_MODE !== "simulate") {
-      // Mark done with manual prompt ready so pipeline can continue in semi-auto mode
+    if (!result.available) {
+      // An unconnected agent has not executed or committed any code.
       await prisma.subTask.update({
         where: { id: current.id },
         data: {
-          status: "done",
-          completedAt: new Date(),
-          logs: appendLog(
-            current.logs,
-            result.logs + "\n\nPrompt left ready for manual agent run; continuing orchestration."
-          ),
-          resultJson: { ...(result.result || {}), manual: true } as object,
+          status: "needs_followup",
+          logs: appendLog(current.logs, result.logs + "\nRun the prompt with a real agent and push the feature branch."),
+          resultJson: { ...(result.result || {}), manualPromptReady: true } as object,
         },
       });
-      continue;
+      await prisma.featureRun.update({
+        where: { id: runId },
+        data: {
+          status: "awaiting_approval",
+          errorMessage: "Agent not connected: manual execution required. No code was committed. Connect an agent or run the prompt, then push changes before approval.",
+        },
+      });
+      return;
     }
 
     if (result.success) {
@@ -280,6 +276,19 @@ async function finishWithPr(runId: string, token: string, scan: RepoScan) {
   });
   if (!run || !run.branchName) return;
 
+  const diff = await checkBranchDiff(token, run.repoFullName, scan.defaultBranch, run.branchName);
+  if (!hasReviewableChanges(diff)) {
+    await prisma.featureRun.update({
+      where: { id: runId },
+      data: {
+        status: "failed",
+        prUrl: null,
+        prNumber: null,
+        errorMessage: "No code changes between " + scan.defaultBranch + " and " + run.branchName + ". Connect an agent or push your actual commits before retrying. No PR was attempted.",
+      },
+    });
+    return;
+  }
   await prisma.featureRun.update({ where: { id: runId }, data: { status: "reviewing" } });
 
   if (!run.prUrl) {
@@ -311,12 +320,12 @@ async function finishWithPr(runId: string, token: string, scan: RepoScan) {
       });
       return;
     } catch (e: any) {
-      // PR may fail if no commits on branch — still wait for approval
+      // GitHub failure must not become a misleading approval-ready state
       await prisma.featureRun.update({
         where: { id: runId },
         data: {
-          status: "awaiting_approval",
-          errorMessage: `PR not opened automatically: ${e?.message || e}. Approve when ready.`,
+          status: "failed",
+          errorMessage: `PR creation failed: ${e?.message || e}. Fix the branch or permissions and retry.`,
           deployUrl: resolveDeployUrl(run.repoFullName, scan),
         },
       });
@@ -338,6 +347,15 @@ export async function approveRun(runId: string, approver: string, merge: boolean
   }
 
   const token = getToken(run.userId);
+  if (!token) throw Object.assign(new Error("GitHub session expired. Sign in again before approval."), { status: 401 });
+  if (!run.branchName || !run.prNumber || !run.prUrl) {
+    throw Object.assign(new Error("No PR exists. Push real code changes before approving."), { status: 409 });
+  }
+  const base = ((run.scanJson as unknown as RepoScan | null)?.defaultBranch) || "main";
+  const diff = await checkBranchDiff(token, run.repoFullName, base, run.branchName);
+  if (!hasReviewableChanges(diff)) {
+    throw Object.assign(new Error("Feature branch has no code changes. Approval blocked."), { status: 409 });
+  }
 
   // Complete any human subtasks
   await prisma.subTask.updateMany({

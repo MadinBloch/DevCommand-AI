@@ -26,7 +26,7 @@ services:
       - key: APP_ORIGIN
         sync: false
       - key: AGENT_MODE
-        value: simulate
+        value: manual
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTIGRAVITY_API_URL

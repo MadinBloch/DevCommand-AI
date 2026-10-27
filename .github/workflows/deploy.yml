@@ -40,6 +40,9 @@ jobs:
       - name: Build backend
         run: npm --prefix backend run build
 
+      - name: Test backend PR guard (no external services)
+        run: npm --prefix backend test
+
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
 
