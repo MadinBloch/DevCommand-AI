@@ -119,7 +119,10 @@ async function drainSubTasks(runId: string, token: string, scan: RepoScan) {
     for (const st of fresh.subTasks) {
       if (st.status !== "queued") continue;
       const deps = (st.dependsOn as number[]) || [];
-      const ok = deps.every((idx) => fresh.subTasks.find((x) => x.orderIndex === idx)?.status === "done");
+      const ok = deps.every(
+        (idx: number) =>
+          fresh.subTasks.find((x: { orderIndex: number; status: string }) => x.orderIndex === idx)?.status === "done"
+      );
       if (ok) {
         await prisma.subTask.update({ where: { id: st.id }, data: { status: "ready" } });
       }
@@ -288,7 +291,11 @@ async function finishWithPr(runId: string, token: string, scan: RepoScan) {
         body: buildPrBody(
           run.goal,
           scan,
-          run.subTasks.map((s) => ({ title: s.title, agent: s.agent, status: s.status }))
+          run.subTasks.map((s: { title: string; agent: string; status: string }) => ({
+            title: s.title,
+            agent: s.agent,
+            status: s.status,
+          }))
         ),
         head: run.branchName,
         base: scan.defaultBranch,
@@ -392,7 +399,7 @@ export async function approveRun(runId: string, approver: string, merge: boolean
 
   const after = await prisma.featureRun.findUnique({ where: { id: runId }, include: { subTasks: true } });
   if (after && !["failed", "awaiting_approval"].includes(after.status)) {
-    const left = after.subTasks.filter((s) => !["done", "skipped"].includes(s.status));
+    const left = after.subTasks.filter((s: { status: string }) => !["done", "skipped"].includes(s.status));
     if (!left.length) {
       await prisma.featureRun.update({
         where: { id: runId },
