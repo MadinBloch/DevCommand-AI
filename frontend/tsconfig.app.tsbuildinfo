@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx"],"version":"5.7.3"}
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/components/ui.tsx","./src/components/workspace/agentstab.tsx","./src/components/workspace/hometab.tsx","./src/components/workspace/repositoriestab.tsx","./src/components/workspace/rundetailtab.tsx","./src/components/workspace/runstab.tsx","./src/components/workspace/status.ts"],"version":"5.7.3"}

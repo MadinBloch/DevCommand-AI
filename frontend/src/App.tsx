@@ -1,6 +1,19 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Bot,
+  GitBranch,
+  Github,
+  LayoutDashboard,
+  Loader2,
+  LogOut,
+  Menu,
+  RefreshCw,
+  Rocket,
+  ShieldCheck,
+  Sparkles,
+  Workflow,
+} from "lucide-react";
 import { Badge, Button } from "./components/ui";
-import { Bot, GitBranch, Github, LayoutDashboard, Loader2, Menu, LogOut, RefreshCw, Rocket, ShieldCheck, Sparkles, Workflow } from "lucide-react";
 import { api, type AgentInfo, type FeatureRun, type FeatureRunDetail, type Repo, type User } from "./api";
 import { HomeView } from "./components/workspace/HomeTab";
 import { RunsList } from "./components/workspace/RunsTab";
@@ -55,7 +68,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!activeRun || !["queued", "scanning", "planning", "running", "testing", "reviewing", "deploying"].includes(activeRun.status))
+    if (
+      !activeRun ||
+      !["queued", "scanning", "planning", "running", "testing", "reviewing", "deploying"].includes(activeRun.status)
+    )
       return;
     const t = setInterval(async () => {
       try {
@@ -76,6 +92,7 @@ export default function App() {
       const r = await api.run(id);
       setActiveRun(r);
       setView("run");
+      setMobileNavOpen(false);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -113,8 +130,9 @@ export default function App() {
   if (loading) {
     return (
       <div className="boot">
-        <Loader2 className="spin" size={28} />
-        <p>Loading DevCommand… </p>
+        <div className="boot-mark">DC</div>
+        <Loader2 className="spin" size={22} />
+        <p>Loading DevCommand…</p>
       </div>
     );
   }
@@ -127,26 +145,60 @@ export default function App() {
     <div className="shell">
       <aside className={`side ${mobileNavOpen ? "side-open" : ""}`}>
         <div className="brand">
-          <span className="mark" aria-hidden="true">DC</span>
+          <span className="mark" aria-hidden="true">
+            DC
+          </span>
           <div>
             <strong>DevCommand</strong>
-            <em>DEVELOPER WORKSPACE</em>
+            <em>MISSION CONTROL</em>
           </div>
         </div>
 
         <p className="eyebrow">Workspace</p>
         <nav aria-label="Workspace navigation">
-          <NavBtn active={view === "home"} onClick={() => { setView("home"); setMobileNavOpen(false); }} icon={<LayoutDashboard size={16} />} label="Command center" />
-          <NavBtn active={view === "runs" || view === "run"} onClick={() => { setView("runs"); setMobileNavOpen(false); }} icon={<Workflow size={16} />} label="Feature runs" />
-          <NavBtn active={view === "repos"} onClick={() => { setView("repos"); setMobileNavOpen(false); }} icon={<GitBranch size={16} />} label="Repositories" />
-          <NavBtn active={view === "agents"} onClick={() => { setView("agents"); setMobileNavOpen(false); }} icon={<Bot size={16} />} label="Agents" />
+          <NavBtn
+            active={view === "home"}
+            onClick={() => {
+              setView("home");
+              setMobileNavOpen(false);
+            }}
+            icon={<LayoutDashboard size={16} />}
+            label="Command center"
+          />
+          <NavBtn
+            active={view === "runs" || view === "run"}
+            onClick={() => {
+              setView("runs");
+              setMobileNavOpen(false);
+            }}
+            icon={<Workflow size={16} />}
+            label="Feature runs"
+          />
+          <NavBtn
+            active={view === "repos"}
+            onClick={() => {
+              setView("repos");
+              setMobileNavOpen(false);
+            }}
+            icon={<GitBranch size={16} />}
+            label="Repositories"
+          />
+          <NavBtn
+            active={view === "agents"}
+            onClick={() => {
+              setView("agents");
+              setMobileNavOpen(false);
+            }}
+            icon={<Bot size={16} />}
+            label="Agents"
+          />
         </nav>
 
         <div className="side-card">
           <ShieldCheck size={18} />
           <div>
             <b>Human gate</b>
-            <p>Merge & deploy only after your approval.</p>
+            <p>Merge & deploy only after your approval. Full run history preserved.</p>
           </div>
         </div>
 
@@ -165,7 +217,9 @@ export default function App() {
       <main className="main">
         <header className="top">
           <div>
-            <p className="eyebrow">Workspace / {view === "run" ? "Feature detail" : view === "home" ? "Overview" : view}</p>
+            <p className="eyebrow">
+              Workspace / {view === "run" ? "Feature detail" : view === "home" ? "Overview" : view}
+            </p>
             <h1>
               {view === "home" && "Command center"}
               {view === "runs" && "Feature runs"}
@@ -175,8 +229,20 @@ export default function App() {
             </h1>
           </div>
           <div className="top-actions">
-            <Button variant="outline" size="icon" className="mobile-toggle" aria-label="Toggle navigation" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((value) => !value)}><Menu size={18}/></Button>
-            <Badge variant={agentMode === "simulate" ? "outline" : "default"}>Agent mode: {agentMode}{agentMode === "simulate" ? " (demo)" : ""}</Badge>
+            <Button
+              variant="outline"
+              size="icon"
+              className="mobile-toggle"
+              aria-label="Toggle navigation"
+              aria-expanded={mobileNavOpen}
+              onClick={() => setMobileNavOpen((value) => !value)}
+            >
+              <Menu size={18} />
+            </Button>
+            <Badge variant={agentMode === "simulate" ? "outline" : "default"}>
+              mode · {agentMode}
+              {agentMode === "simulate" ? " (demo)" : ""}
+            </Badge>
             <Button variant="outline" onClick={bootstrap} disabled={loading}>
               <RefreshCw size={15} /> Refresh
             </Button>
@@ -184,21 +250,40 @@ export default function App() {
         </header>
 
         <nav className="workspace-tabs" aria-label="Workspace sections">
-          {([
-            ["home", "Command Center", LayoutDashboard],
-            ["runs", "Feature Runs", Workflow],
-            ["repos", "Repositories", GitBranch],
-            ["agents", "AI Agents", Bot]
-          ] as const).map(([id, label, Icon]) => (
-            <button key={id} type="button" className={`workspace-tab ${(view === id || (id === "runs" && view === "run")) ? "active" : ""}`}
+          {(
+            [
+              ["home", "Command Center", LayoutDashboard],
+              ["runs", "Feature Runs", Workflow],
+              ["repos", "Repositories", GitBranch],
+              ["agents", "AI Agents", Bot],
+            ] as const
+          ).map(([id, label, Icon]) => (
+            <button
+              key={id}
+              type="button"
+              className={`workspace-tab ${view === id || (id === "runs" && view === "run") ? "active" : ""}`}
               aria-current={view === id || (id === "runs" && view === "run") ? "page" : undefined}
-              onClick={() => { setView(id); setMobileNavOpen(false); }}>
-              <Icon size={16} /><span>{label}</span>
+              onClick={() => {
+                setView(id);
+                setMobileNavOpen(false);
+              }}
+            >
+              <Icon size={16} />
+              <span>{label}</span>
               {id === "runs" && <span className="tab-counter">{runs.length}</span>}
             </button>
           ))}
         </nav>
-        {view === "run" && activeRun && <div className="detail-breadcrumb"><button type="button" onClick={() => setView("runs")}>Feature Runs</button><span>/</span><strong>{activeRun.title}</strong></div>}
+
+        {view === "run" && activeRun && (
+          <div className="detail-breadcrumb">
+            <button type="button" onClick={() => setView("runs")}>
+              Feature Runs
+            </button>
+            <span>/</span>
+            <strong>{activeRun.title}</strong>
+          </div>
+        )}
 
         {error && <div className="banner bad">{error}</div>}
 
@@ -242,38 +327,57 @@ export default function App() {
 function LoginPage({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
     <div className="login">
-      <div className="login-bg" />
-      <div className="login-panel">
-        <div className="brand big">
+      <div className="login-visual">
+        <div className="brand">
           <span className="mark">DC</span>
           <div>
             <strong>DevCommand AI</strong>
             <em>ORCHESTRATE · ASSIGN · SHIP</em>
           </div>
         </div>
-        <h1>One goal. Multiple agents. Your approval.</h1>
-        <p>
-          Sign in with GitHub, pick a repo, describe the feature. DevCommand scans the codebase, splits work,
-          generates agent prompts, supervises progress, then waits for you before deploy.
+        <div>
+          <h1>
+            Mission control for <span>coding agents</span>
+          </h1>
+          <p>
+            Describe a feature once. We scan the repo, split work, generate prompts, supervise agents, and keep the
+            full history — then you approve the ship.
+          </p>
+          <div className="login-orbit">
+            <span>Repo scan</span>
+            <span>Auto prompts</span>
+            <span>Multi-agent</span>
+            <span>Human gate</span>
+          </div>
+        </div>
+        <p className="hint" style={{ margin: 0 }}>
+          Your run history stays with your account after every session.
         </p>
+      </div>
+
+      <div className="login-panel">
+        <h2>Sign in to continue</h2>
+        <p>Connect GitHub to load writable repos and resume your orchestration history.</p>
         <ul className="login-steps">
           <li>
-            <Sparkles size={16} /> Scan repo & plan
+            <Sparkles size={16} /> Scan repo & build a plan
           </li>
           <li>
-            <Bot size={16} /> Assign Codex / Antigravity
+            <Bot size={16} /> Assign Codex / Antigravity tasks
           </li>
           <li>
             <Rocket size={16} /> Test, approve, deploy
           </li>
         </ul>
         {error && <div className="banner bad">{error}</div>}
-        <Button className="primary lg" onClick={() => (location.href = api.loginUrl())}>
-          <Github size={18} /> Continue with GitHub
-        </Button>
-        <Button variant="outline" onClick={onRetry}>
-          Check API connection
-        </Button>
+        <div className="login-actions">
+          <Button className="primary lg" onClick={() => (location.href = api.loginUrl())}>
+            <Github size={18} /> Continue with GitHub
+          </Button>
+          <Button variant="outline" onClick={onRetry}>
+            Check API connection
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -291,10 +395,14 @@ function NavBtn({
   label: string;
 }) {
   return (
-    <button type="button" aria-current={active ? "page" : undefined} className={`nav ${active ? "active" : ""}`} onClick={onClick}>
+    <button
+      type="button"
+      aria-current={active ? "page" : undefined}
+      className={`nav ${active ? "active" : ""}`}
+      onClick={onClick}
+    >
       {icon}
       {label}
     </button>
   );
 }
-

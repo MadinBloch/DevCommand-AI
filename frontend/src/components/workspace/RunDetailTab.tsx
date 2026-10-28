@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { CheckCircle2, Play, Rocket, ClipboardList, Copy, RefreshCw } from "lucide-react";
+import { CheckCircle2, ClipboardList, Copy, Play, RefreshCw, Rocket } from "lucide-react";
+import { Button } from "../ui";
 import { api, type FeatureRunDetail, type SubTask } from "../../api";
-import { STATUS_LABEL, statusClass } from "./status";
+import { STATUS_LABEL, formatWhen, runProgress, statusClass } from "./status";
 
 export function RunDetail({
   run,
@@ -18,6 +19,7 @@ export function RunDetail({
 }) {
   const [expanded, setExpanded] = useState<string | null>(run.subTasks[0]?.id || null);
   const scan = run.scanJson as any;
+  const prog = runProgress(run);
 
   async function act(fn: () => Promise<{ run: FeatureRunDetail }>) {
     setBusy(true);
@@ -33,7 +35,7 @@ export function RunDetail({
   }
 
   return (
-    <div className="stack">
+    <div className="stack rise">
       <section className="surface run-head">
         <div>
           <p className="eyebrow">{run.repoFullName}</p>
@@ -41,6 +43,7 @@ export function RunDetail({
           <p className="goal">{run.goal}</p>
           <div className="meta-row">
             <span className={`pill ${statusClass(run.status)}`}>{STATUS_LABEL[run.status] || run.status}</span>
+            <span className="pill mute">created · {formatWhen(run.createdAt)}</span>
             {run.branchName && <span className="pill mute">branch · {run.branchName}</span>}
             {run.prUrl && (
               <a className="pill live" href={run.prUrl} target="_blank" rel="noreferrer">
@@ -52,10 +55,20 @@ export function RunDetail({
                 Deploy target
               </a>
             )}
+            {prog.total > 0 && (
+              <span className="pill mute">
+                {prog.done}/{prog.total} tasks · {prog.pct}%
+              </span>
+            )}
           </div>
-          {run.errorMessage && <div className="banner warn">{run.errorMessage}</div>}
+          {prog.total > 0 && (
+            <div className="progress-track" style={{ width: "100%", maxWidth: 360, height: 6, marginTop: 14 }}>
+              <div className="progress-fill" style={{ width: `${prog.pct}%` }} />
+            </div>
+          )}
+          {run.errorMessage && <div className="banner warn" style={{ marginTop: 14 }}>{run.errorMessage}</div>}
           {run.testSummary && (
-            <div className="banner mute">
+            <div className="banner mute" style={{ marginTop: 14 }}>
               <b>Test summary</b>
               <pre>{run.testSummary}</pre>
             </div>
@@ -63,19 +76,24 @@ export function RunDetail({
         </div>
         <div className="run-actions">
           {["queued", "failed"].includes(run.status) && (
-            <button className="primary" disabled={busy} onClick={() => act(() => api.startRun(run.id))}>
+            <Button disabled={busy} onClick={() => act(() => api.startRun(run.id))}>
               <Play size={16} /> Restart pipeline
-            </button>
+            </Button>
           )}
-          {run.status === "awaiting_approval" && !run.prUrl && <p className="hint" role="status">Coding work is pending. Connect an agent or push commits to your feature branch; PR approval is unavailable until a real PR exists.</p>}
+          {run.status === "awaiting_approval" && !run.prUrl && (
+            <p className="hint" role="status">
+              Coding work is pending. Connect an agent or push commits to your feature branch; PR approval is
+              unavailable until a real PR exists.
+            </p>
+          )}
           {run.status === "awaiting_approval" && Boolean(run.prUrl) && (
             <>
-              <button className="primary" disabled={busy} onClick={() => act(() => api.approveRun(run.id, false))}>
+              <Button disabled={busy} onClick={() => act(() => api.approveRun(run.id, false))}>
                 <CheckCircle2 size={16} /> Approve (no merge)
-              </button>
-              <button className="ghost" disabled={busy} onClick={() => act(() => api.approveRun(run.id, true))}>
+              </Button>
+              <Button variant="outline" disabled={busy} onClick={() => act(() => api.approveRun(run.id, true))}>
                 <Rocket size={16} /> Approve & merge PR
-              </button>
+              </Button>
             </>
           )}
         </div>
@@ -85,10 +103,10 @@ export function RunDetail({
         <section className="surface">
           <p className="eyebrow">Repo scan</p>
           <h3>Context used for planning</h3>
-          <p>{scan.summary}</p>
+          <p className="hint">{scan.summary}</p>
           {!!scan.relevantFiles?.length && (
             <div className="chips">
-              {scan.relevantFiles.slice(0, 12).map((f: string) => (
+              {scan.relevantFiles.slice(0, 14).map((f: string) => (
                 <span key={f}>{f}</span>
               ))}
             </div>
@@ -97,8 +115,25 @@ export function RunDetail({
       )}
 
       <section className="surface">
-        <p className="eyebrow">Sub-tasks</p>
+        <p className="eyebrow">Pipeline timeline</p>
         <h3>Assigned workboard</h3>
+        <div className="timeline" style={{ marginBottom: 18 }}>
+          {run.subTasks.map((st) => (
+            <div key={st.id} className={`timeline-item ${statusClass(st.status)}`}>
+              <span className="node" />
+              <div>
+                <b style={{ fontSize: "0.9rem" }}>
+                  {st.orderIndex + 1}. {st.title}
+                </b>
+                <div className="run-meta">
+                  {st.agent} · {STATUS_LABEL[st.status] || st.status}
+                  {st.completedAt ? ` · finished ${formatWhen(st.completedAt)}` : ""}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
         <div className="board">
           {run.subTasks.map((st) => (
             <SubTaskCard
@@ -134,7 +169,7 @@ function SubTaskCard({
 }) {
   return (
     <article className={`task-card ${statusClass(st.status)}`}>
-      <button className="task-head" onClick={onToggle}>
+      <button type="button" className="task-head" onClick={onToggle}>
         <div>
           <span className="agent-tag">{st.agent}</span>
           <b>
@@ -150,22 +185,23 @@ function SubTaskCard({
           <p className="eyebrow">Generated prompt</p>
           <pre className="prompt">{st.generatedPrompt}</pre>
           <div className="row">
-            <button
-              className="ghost"
+            <Button
+              variant="outline"
+              size="sm"
               type="button"
               onClick={() => navigator.clipboard.writeText(st.followUpPrompt || st.generatedPrompt)}
             >
               <Copy size={14} /> Copy prompt
-            </button>
+            </Button>
             {["failed", "needs_followup"].includes(st.status) && (
-              <button className="ghost" disabled={busy} onClick={onRetry}>
+              <Button variant="outline" size="sm" disabled={busy} onClick={onRetry}>
                 <RefreshCw size={14} /> Retry
-              </button>
+              </Button>
             )}
             {st.status !== "done" && (
-              <button className="ghost" disabled={busy} onClick={onComplete}>
+              <Button variant="outline" size="sm" disabled={busy} onClick={onComplete}>
                 <ClipboardList size={14} /> Mark done
-              </button>
+              </Button>
             )}
           </div>
           {st.logs && (
