@@ -10,23 +10,31 @@ import {
   Menu,
   RefreshCw,
   Rocket,
-  ShieldCheck,
   Sparkles,
   Workflow,
+  X,
 } from "lucide-react";
 import { Badge, Button } from "./components/ui";
 import { api, type AgentInfo, type FeatureRun, type FeatureRunDetail, type Repo, type User } from "./api";
-import { HomeView } from "./components/workspace/HomeTab";
+import { DashboardHome } from "./dashboard/DashboardHome";
 import { RunsList } from "./components/workspace/RunsTab";
 import { RunDetail } from "./components/workspace/RunDetailTab";
 import { ReposView } from "./components/workspace/RepositoriesTab";
 import { AgentsView } from "./components/workspace/AgentsTab";
 import { SettingsView } from "./components/workspace/SettingsTab";
 
-type View = "home" | "runs" | "run" | "agents" | "repos" | "settings";
+type Page = "dashboard" | "runs" | "run" | "repos" | "agents" | "settings";
+
+const NAV: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "runs", label: "Runs", icon: Workflow },
+  { id: "repos", label: "Repositories", icon: GitBranch },
+  { id: "agents", label: "Agents", icon: Bot },
+  { id: "settings", label: "Settings", icon: KeyRound },
+];
 
 export default function App() {
-  const [view, setView] = useState<View>("home");
+  const [page, setPage] = useState<Page>("dashboard");
   const [user, setUser] = useState<User | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [runs, setRuns] = useState<FeatureRun[]>([]);
@@ -39,7 +47,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
 
   const [repo, setRepo] = useState("");
   const [title, setTitle] = useState("");
@@ -85,11 +93,16 @@ export default function App() {
         setActiveRun(r);
         setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...r } : x)));
       } catch {
-        /* ignore poll errors */
+        /* ignore */
       }
     }, 2500);
     return () => clearInterval(t);
   }, [activeRun?.id, activeRun?.status]);
+
+  function go(next: Page) {
+    setPage(next);
+    setNavOpen(false);
+  }
 
   async function openRun(id: string) {
     setBusy(true);
@@ -97,8 +110,7 @@ export default function App() {
     try {
       const r = await api.run(id);
       setActiveRun(r);
-      setView("run");
-      setMobileNavOpen(false);
+      go("run");
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -116,7 +128,7 @@ export default function App() {
       setGoal("");
       setRuns((prev) => [run, ...prev]);
       setActiveRun(run);
-      setView("run");
+      go("run");
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -130,15 +142,24 @@ export default function App() {
     setRepos([]);
     setRuns([]);
     setActiveRun(null);
-    setView("home");
+    setPage("dashboard");
   }
+
+  const titles: Record<Page, string> = {
+    dashboard: "Dashboard",
+    runs: "Runs",
+    run: activeRun?.title || "Run detail",
+    repos: "Repositories",
+    agents: "Agents",
+    settings: "Settings",
+  };
 
   if (loading) {
     return (
       <div className="boot">
         <div className="boot-mark">DC</div>
         <Loader2 className="spin" size={22} />
-        <p>Loading DevCommand…</p>
+        <p>Loading workspace…</p>
       </div>
     );
   }
@@ -148,208 +169,146 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
-      <aside className={`side ${mobileNavOpen ? "side-open" : ""}`}>
-        <div className="brand">
-          <span className="mark" aria-hidden="true">
-            DC
-          </span>
-          <div>
-            <strong>DevCommand</strong>
-            <em>MISSION CONTROL</em>
+    <div className={`app-shell ${navOpen ? "nav-open" : ""}`}>
+      {navOpen && <button type="button" className="nav-backdrop" aria-label="Close menu" onClick={() => setNavOpen(false)} />}
+
+      <aside className="app-nav" aria-label="Main">
+        <div className="app-nav-top">
+          <div className="brand">
+            <span className="mark">DC</span>
+            <div>
+              <strong>DevCommand</strong>
+              <em>WORKSPACE</em>
+            </div>
           </div>
+          <button type="button" className="nav-close ghost icon" onClick={() => setNavOpen(false)} aria-label="Close">
+            <X size={16} />
+          </button>
         </div>
 
-        <p className="eyebrow">Workspace</p>
-        <nav aria-label="Workspace navigation">
-          <NavBtn
-            active={view === "home"}
-            onClick={() => {
-              setView("home");
-              setMobileNavOpen(false);
-            }}
-            icon={<LayoutDashboard size={16} />}
-            label="Command center"
-          />
-          <NavBtn
-            active={view === "runs" || view === "run"}
-            onClick={() => {
-              setView("runs");
-              setMobileNavOpen(false);
-            }}
-            icon={<Workflow size={16} />}
-            label="Feature runs"
-          />
-          <NavBtn
-            active={view === "repos"}
-            onClick={() => {
-              setView("repos");
-              setMobileNavOpen(false);
-            }}
-            icon={<GitBranch size={16} />}
-            label="Repositories"
-          />
-          <NavBtn
-            active={view === "agents"}
-            onClick={() => {
-              setView("agents");
-              setMobileNavOpen(false);
-            }}
-            icon={<Bot size={16} />}
-            label="Agents"
-          />
-          <NavBtn
-            active={view === "settings"}
-            onClick={() => {
-              setView("settings");
-              setMobileNavOpen(false);
-            }}
-            icon={<KeyRound size={16} />}
-            label="Settings"
-          />
+        <nav className="app-nav-links">
+          {NAV.map((item) => (
+            <NavItem
+              key={item.id}
+              active={page === item.id || (item.id === "runs" && page === "run")}
+              icon={<item.icon size={17} />}
+              label={item.label}
+              badge={item.id === "runs" ? runs.length : undefined}
+              onClick={() => go(item.id)}
+            />
+          ))}
         </nav>
 
-        <div className="side-card">
-          <ShieldCheck size={18} />
-          <div>
-            <b>Human gate</b>
-            <p>Merge & deploy only after your approval. Full run history preserved.</p>
+        <div className="app-nav-foot">
+          <div className="user-chip">
+            {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span className="av">{user.login[0]}</span>}
+            <div>
+              <b>{user.name || user.login}</b>
+              <span>@{user.login}</span>
+            </div>
+            <button type="button" className="ghost icon" aria-label="Sign out" onClick={logout}>
+              <LogOut size={15} />
+            </button>
           </div>
-        </div>
-
-        <div className="user-chip">
-          {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span className="av">{user.login[0]}</span>}
-          <div>
-            <b>{user.name || user.login}</b>
-            <span>@{user.login}</span>
-          </div>
-          <button className="ghost icon" aria-label="Sign out" title="Sign out" onClick={logout}>
-            <LogOut size={15} />
-          </button>
         </div>
       </aside>
 
-      <main className="main">
-        <header className="top">
-          <div>
-            <p className="eyebrow">
-              Workspace / {view === "run" ? "Feature detail" : view === "home" ? "Overview" : view}
-            </p>
-            <h1>
-              {view === "home" && "Command center"}
-              {view === "runs" && "Feature runs"}
-              {view === "run" && (activeRun?.title || "Run detail")}
-              {view === "repos" && "Repositories"}
-              {view === "agents" && "Agent registry"}
-              {view === "settings" && "Settings"}
-            </h1>
-          </div>
-          <div className="top-actions">
-            <Button
-              variant="outline"
-              size="icon"
-              className="mobile-toggle"
-              aria-label="Toggle navigation"
-              aria-expanded={mobileNavOpen}
-              onClick={() => setMobileNavOpen((value) => !value)}
-            >
+      <div className="app-body">
+        <header className="app-topbar">
+          <div className="app-topbar-left">
+            <Button variant="outline" size="icon" className="mobile-toggle" aria-label="Open menu" onClick={() => setNavOpen(true)}>
               <Menu size={18} />
             </Button>
+            <div>
+              {page === "run" && activeRun ? (
+                <div className="crumb">
+                  <button type="button" onClick={() => go("runs")}>
+                    Runs
+                  </button>
+                  <span>/</span>
+                  <strong>{activeRun.title}</strong>
+                </div>
+              ) : (
+                <h1>{titles[page]}</h1>
+              )}
+            </div>
+          </div>
+          <div className="app-topbar-right">
             <Badge variant={canCommit ? "default" : "outline"}>
-              {canCommit ? "commits on" : "commits off"} · {agentMode}
+              {canCommit ? "ready" : "setup needed"} · {agentMode}
             </Badge>
-            <Button variant="outline" onClick={bootstrap} disabled={loading}>
+            <Button variant="outline" onClick={bootstrap}>
               <RefreshCw size={15} /> Refresh
             </Button>
           </div>
         </header>
 
-        <nav className="workspace-tabs" aria-label="Workspace sections">
-          {(
-            [
-              ["home", "Command Center", LayoutDashboard],
-              ["runs", "Feature Runs", Workflow],
-              ["repos", "Repositories", GitBranch],
-              ["agents", "AI Agents", Bot],
-              ["settings", "Settings", KeyRound],
-            ] as const
-          ).map(([id, label, Icon]) => (
-            <button
-              key={id}
-              type="button"
-              className={`workspace-tab ${view === id || (id === "runs" && view === "run") ? "active" : ""}`}
-              aria-current={view === id || (id === "runs" && view === "run") ? "page" : undefined}
-              onClick={() => {
-                setView(id);
-                setMobileNavOpen(false);
+        <div className="app-content">
+          {error && <div className="banner bad">{error}</div>}
+
+          {page === "dashboard" && (
+            <DashboardHome
+              user={user}
+              runs={runs}
+              repos={repos}
+              repo={repo}
+              setRepo={setRepo}
+              title={title}
+              setTitle={setTitle}
+              goal={goal}
+              setGoal={setGoal}
+              busy={busy}
+              canCommit={canCommit}
+              llmCoder={llmCoder}
+              agentMode={agentMode}
+              onCreate={createRun}
+              onOpen={openRun}
+              onNavigate={(p) => go(p)}
+            />
+          )}
+          {page === "runs" && <RunsList runs={runs} onOpen={openRun} />}
+          {page === "run" && activeRun && (
+            <RunDetail
+              run={activeRun}
+              busy={busy}
+              setBusy={setBusy}
+              setError={setError}
+              onUpdate={(r) => {
+                setActiveRun(r);
+                setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...r } : x)));
               }}
-            >
-              <Icon size={16} />
-              <span>{label}</span>
-              {id === "runs" && <span className="tab-counter">{runs.length}</span>}
-            </button>
-          ))}
-        </nav>
-
-        {view === "run" && activeRun && (
-          <div className="detail-breadcrumb">
-            <button type="button" onClick={() => setView("runs")}>
-              Feature Runs
-            </button>
-            <span>/</span>
-            <strong>{activeRun.title}</strong>
-          </div>
-        )}
-
-        {error && <div className="banner bad">{error}</div>}
-
-        {view === "home" && (
-          <HomeView
-            user={user}
-            runs={runs}
-            repos={repos}
-            repo={repo}
-            setRepo={setRepo}
-            title={title}
-            setTitle={setTitle}
-            goal={goal}
-            setGoal={setGoal}
-            busy={busy}
-            llmPlanner={llmPlanner}
-            canCommit={canCommit}
-            llmCoder={llmCoder}
-            agentMode={agentMode}
-            onCreate={createRun}
-            onOpen={openRun}
-            onOpenAgents={() => setView("settings")}
-          />
-        )}
-        {view === "runs" && <RunsList runs={runs} onOpen={openRun} />}
-        {view === "run" && activeRun && (
-          <RunDetail
-            run={activeRun}
-            busy={busy}
-            setBusy={setBusy}
-            setError={setError}
-            onUpdate={(r) => {
-              setActiveRun(r);
-              setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...r } : x)));
-            }}
-          />
-        )}
-        {view === "repos" && <ReposView repos={repos} />}
-        {view === "agents" && (
-          <AgentsView
-            agents={agents}
-            mode={agentMode}
-            llmPlanner={llmPlanner}
-            llmCoder={llmCoder}
-            canCommit={canCommit}
-          />
-        )}
-        {view === "settings" && <SettingsView onSaved={() => void bootstrap()} />}
-      </main>
+            />
+          )}
+          {page === "repos" && <ReposView repos={repos} />}
+          {page === "agents" && (
+            <AgentsView agents={agents} mode={agentMode} llmPlanner={llmPlanner} llmCoder={llmCoder} canCommit={canCommit} />
+          )}
+          {page === "settings" && <SettingsView onSaved={() => void bootstrap()} />}
+        </div>
+      </div>
     </div>
+  );
+}
+
+function NavItem({
+  active,
+  icon,
+  label,
+  badge,
+  onClick,
+}: {
+  active: boolean;
+  icon: ReactNode;
+  label: string;
+  badge?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className={`app-nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} onClick={onClick}>
+      {icon}
+      <span>{label}</span>
+      {typeof badge === "number" && <em className="nav-badge">{badge}</em>}
+    </button>
   );
 }
 
@@ -361,41 +320,34 @@ function LoginPage({ error, onRetry }: { error: string; onRetry: () => void }) {
           <span className="mark">DC</span>
           <div>
             <strong>DevCommand AI</strong>
-            <em>ORCHESTRATE · ASSIGN · SHIP</em>
+            <em>BUILD · REVIEW · SHIP</em>
           </div>
         </div>
         <div>
           <h1>
-            Mission control for <span>coding agents</span>
+            Your AI coding <span>control plane</span>
           </h1>
-          <p>
-            Describe a feature once. We scan the repo, split work, generate prompts, supervise agents, and keep the
-            full history — then you approve the ship.
-          </p>
+          <p>One goal in. Multi-agent plan, commits, PR, and approval — with full run history.</p>
           <div className="login-orbit">
-            <span>Repo scan</span>
-            <span>Auto prompts</span>
-            <span>Multi-agent</span>
-            <span>Human gate</span>
+            <span>Scan</span>
+            <span>Assign</span>
+            <span>Commit</span>
+            <span>Approve</span>
           </div>
         </div>
-        <p className="hint" style={{ margin: 0 }}>
-          Your run history stays with your account after every session.
-        </p>
       </div>
-
       <div className="login-panel">
-        <h2>Sign in to continue</h2>
-        <p>Connect GitHub to load writable repos and resume your orchestration history.</p>
+        <h2>Sign in to your workspace</h2>
+        <p>Connect GitHub to load repos and continue where you left off.</p>
         <ul className="login-steps">
           <li>
-            <Sparkles size={16} /> Scan repo & build a plan
+            <Sparkles size={16} /> Plan work from a single goal
           </li>
           <li>
-            <Bot size={16} /> Assign Codex / Antigravity tasks
+            <Bot size={16} /> Assign coding agents automatically
           </li>
           <li>
-            <Rocket size={16} /> Test, approve, deploy
+            <Rocket size={16} /> Review PRs before merge
           </li>
         </ul>
         {error && <div className="banner bad">{error}</div>}
@@ -409,29 +361,5 @@ function LoginPage({ error, onRetry }: { error: string; onRetry: () => void }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function NavBtn({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      aria-current={active ? "page" : undefined}
-      className={`nav ${active ? "active" : ""}`}
-      onClick={onClick}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }
