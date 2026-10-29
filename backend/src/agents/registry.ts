@@ -1,119 +1,124 @@
 import type { AgentAdapter, AgentName, AgentRunInput, AgentRunResult } from "./types.js";
+import { llmCoderAvailable, runLlmCoder, simulateCommit } from "./llmCoder.js";
 
-function simulateWork(input: AgentRunInput): AgentRunResult {
-  const lines = [
-    `[${input.agent}] Starting step: ${input.title}`,
-    `[${input.agent}] Repo: ${input.repoFullName} @ ${input.branchName}`,
-    `[${input.agent}] Attempt ${input.attempt}`,
-    `[${input.agent}] Prompt length: ${input.prompt.length} chars`,
-    `[${input.agent}] Simulation only: no files modified, no tests executed, no commits created.`,
-  ];
+async function maybeExternal(
+  baseUrl: string | undefined,
+  apiKey: string | undefined,
+  input: AgentRunInput
+): Promise<AgentRunResult | null> {
+  if (!baseUrl) return null;
+  try {
+    const r = await fetch(baseUrl.replace(/\/$/, "") + "/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: "Bearer " + apiKey } : {}),
+      },
+      body: JSON.stringify(input),
+    });
+    if (!r.ok) {
+      return {
+        success: false,
+        available: true,
+        logs: await r.text(),
+        followUpReason: "External adapter returned non-OK status",
+      };
+    }
+    const data = (await r.json()) as AgentRunResult;
+    return { ...data, available: true };
+  } catch (e: any) {
+    return {
+      success: false,
+      available: true,
+      logs: String(e?.message || e),
+      followUpReason: "External adapter request failed",
+    };
+  }
+}
+
+function userKeysFrom(input: AgentRunInput) {
+  return { openaiApiKey: input.openaiApiKey, anthropicApiKey: input.anthropicApiKey };
+}
+
+async function executeCodingAgent(input: AgentRunInput, kind: "codex" | "antigravity"): Promise<AgentRunResult> {
+  const url = kind === "codex" ? process.env.CODEX_API_URL : process.env.ANTIGRAVITY_API_URL;
+  const key = kind === "codex" ? process.env.CODEX_API_KEY : process.env.ANTIGRAVITY_API_KEY;
+  const external = await maybeExternal(url, key, input);
+  if (external) {
+    const files = (external.result as any)?.files;
+    if (external.success && Array.isArray(files) && files[0]?.content != null) {
+      const { commitFilesToBranch } = await import("../services/gitWriter.js");
+      try {
+        const committed = await commitFilesToBranch({
+          token: input.token,
+          fullName: input.repoFullName,
+          branchName: input.branchName,
+          message: String((external.result as any)?.commitMessage || `feat(devcommand): ${input.title}`),
+          files,
+        });
+        return {
+          ...external,
+          logs: external.logs + `\n[devcommand] committed ${committed.commitSha}`,
+          result: { ...(external.result || {}), commitSha: committed.commitSha },
+        };
+      } catch (e: any) {
+        return {
+          success: false,
+          available: true,
+          logs: external.logs + "\nCommit failed: " + (e?.message || e),
+          followUpReason: "Adapter succeeded but GitHub commit failed",
+        };
+      }
+    }
+    return external;
+  }
+
+  if (llmCoderAvailable(userKeysFrom(input))) {
+    return runLlmCoder(input, { relevantFiles: input.relevantFiles });
+  }
+
+  if (process.env.AGENT_MODE === "simulate") {
+    return simulateCommit({ ...input, agent: kind });
+  }
+
   return {
-    success: true,
-    available: true,
-    logs: lines.join("\n"),
-    summary: `Simulated ${input.agent} completed "${input.title}".`,
-    result: { mode: "simulate", agent: input.agent },
+    success: false,
+    available: false,
+    logs:
+      "No coding engine. Add your OpenAI key in Settings, set OPENAI_API_KEY on the server, connect an adapter, or use AGENT_MODE=simulate.",
+    followUpReason: "Adapter unavailable",
+    result: { manualPromptReady: true },
   };
+}
+
+function codingAvailable(userKeys?: { openaiApiKey?: string | null; anthropicApiKey?: string | null }) {
+  return Boolean(
+    process.env.CODEX_API_URL ||
+      process.env.ANTIGRAVITY_API_URL ||
+      llmCoderAvailable(userKeys) ||
+      process.env.AGENT_MODE === "simulate"
+  );
 }
 
 const antigravity: AgentAdapter = {
   name: "antigravity",
-  available: Boolean(process.env.ANTIGRAVITY_API_URL || process.env.AGENT_MODE === "simulate"),
-  reason: process.env.ANTIGRAVITY_API_URL
-    ? undefined
-    : process.env.AGENT_MODE === "simulate"
-      ? undefined
-      : "Set ANTIGRAVITY_API_URL or AGENT_MODE=simulate",
-  async run(input) {
-    if (process.env.ANTIGRAVITY_API_URL) {
-      try {
-        const r = await fetch(process.env.ANTIGRAVITY_API_URL.replace(/\/$/, "") + "/run", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(process.env.ANTIGRAVITY_API_KEY
-              ? { Authorization: "Bearer " + process.env.ANTIGRAVITY_API_KEY }
-              : {}),
-          },
-          body: JSON.stringify(input),
-        });
-        if (!r.ok) {
-          return {
-            success: false,
-            available: true,
-            logs: await r.text(),
-            followUpReason: "Antigravity adapter returned non-OK status",
-          };
-        }
-        const data = (await r.json()) as AgentRunResult;
-        return { ...data, available: true };
-      } catch (e: any) {
-        return {
-          success: false,
-          available: true,
-          logs: String(e?.message || e),
-          followUpReason: "Antigravity request failed",
-        };
-      }
-    }
-    if (process.env.AGENT_MODE === "simulate") return simulateWork({ ...input, agent: "antigravity" });
-    return {
-      success: false,
-      available: false,
-      logs: "Antigravity adapter not configured.",
-      followUpReason: "Adapter unavailable",
-    };
-  },
+  available: codingAvailable(),
+  reason: undefined,
+  run: (input) => executeCodingAgent(input, "antigravity"),
 };
 
 const codex: AgentAdapter = {
   name: "codex",
-  available: Boolean(process.env.CODEX_API_URL || process.env.AGENT_MODE === "simulate"),
-  reason: process.env.CODEX_API_URL
-    ? undefined
-    : process.env.AGENT_MODE === "simulate"
-      ? undefined
-      : "Set CODEX_API_URL or AGENT_MODE=simulate",
-  async run(input) {
-    if (process.env.CODEX_API_URL) {
-      try {
-        const r = await fetch(process.env.CODEX_API_URL.replace(/\/$/, "") + "/run", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(process.env.CODEX_API_KEY ? { Authorization: "Bearer " + process.env.CODEX_API_KEY } : {}),
-          },
-          body: JSON.stringify(input),
-        });
-        if (!r.ok) {
-          return {
-            success: false,
-            available: true,
-            logs: await r.text(),
-            followUpReason: "Codex adapter returned non-OK status",
-          };
-        }
-        const data = (await r.json()) as AgentRunResult;
-        return { ...data, available: true };
-      } catch (e: any) {
-        return {
-          success: false,
-          available: true,
-          logs: String(e?.message || e),
-          followUpReason: "Codex request failed",
-        };
-      }
-    }
-    if (process.env.AGENT_MODE === "simulate") return simulateWork({ ...input, agent: "codex" });
-    return {
-      success: false,
-      available: false,
-      logs: "Codex adapter not configured. Prompt is ready to copy into Codex manually.",
-      followUpReason: "Adapter unavailable — use generated prompt manually",
-      result: { manualPromptReady: true },
-    };
-  },
+  available: codingAvailable(),
+  reason: undefined,
+  run: (input) => executeCodingAgent(input, "codex"),
+};
+
+const llm: AgentAdapter = {
+  name: "llm",
+  available: llmCoderAvailable(),
+  reason: undefined,
+  run: (input) => runLlmCoder(input, { relevantFiles: input.relevantFiles }),
 };
 
 const human: AgentAdapter = {
@@ -135,7 +140,7 @@ const simulated: AgentAdapter = {
   name: "simulated",
   available: true,
   async run(input) {
-    return simulateWork(input);
+    return simulateCommit(input);
   },
 };
 
@@ -144,32 +149,48 @@ const adapters: Record<AgentName, AgentAdapter> = {
   codex,
   human,
   simulated,
+  llm,
 };
 
-export function listAgents() {
+export function listAgents(userKeys?: { openaiApiKey?: string | null; anthropicApiKey?: string | null }) {
+  const canLlm = llmCoderAvailable(userKeys);
+  const canCode = codingAvailable(userKeys);
   return (Object.keys(adapters) as AgentName[]).map((name) => {
-    const a = adapters[name];
-    const simulationOnly = process.env.AGENT_MODE === "simulate" &&
-      ((name === "codex" && !process.env.CODEX_API_URL) ||
-       (name === "antigravity" && !process.env.ANTIGRAVITY_API_URL));
+    if (name === "human" || name === "simulated") {
+      return { name, available: true, reason: null as string | null };
+    }
+    if (name === "llm") {
+      return {
+        name,
+        available: canLlm,
+        reason: canLlm ? "LLM coder ready" : "Add OpenAI key in Settings",
+      };
+    }
     return {
-      name: a.name,
-      available: simulationOnly ? false : a.available,
-      reason: simulationOnly ? "Simulation only; no real coding agent connected." : a.reason || null,
+      name,
+      available: canCode,
+      reason: canCode
+        ? canLlm
+          ? "Using LLM coder / adapter"
+          : process.env.AGENT_MODE === "simulate"
+            ? "Simulation commits"
+            : "Adapter connected"
+        : "Add OpenAI key in Settings or connect adapter",
     };
   });
 }
 
+export function executionCapability(userKeys?: { openaiApiKey?: string | null; anthropicApiKey?: string | null }) {
+  return {
+    mode: process.env.AGENT_MODE || "manual",
+    llmCoder: llmCoderAvailable(userKeys),
+    canCommit: codingAvailable(userKeys),
+  };
+}
+
 export async function runAgent(input: AgentRunInput): Promise<AgentRunResult> {
   const key = (input.agent as AgentName) in adapters ? (input.agent as AgentName) : "codex";
-  const adapter = adapters[key] || adapters.codex;
-
   if (key === "human") return human.run(input);
-
-  // If specific adapter unavailable but simulate mode on, fall back
-  if (!adapter.available && process.env.AGENT_MODE === "simulate") {
-    return simulateWork({ ...input, agent: key });
-  }
-
+  const adapter = adapters[key] || adapters.codex;
   return adapter.run(input);
 }

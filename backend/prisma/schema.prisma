@@ -8,16 +8,18 @@ datasource db {
 }
 
 model User {
-  id          String       @id
-  githubId    Int          @unique
-  login       String
-  name        String?
-  avatarUrl   String?
-  email       String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  featureRuns FeatureRun[]
-  tasks       Task[]
+  id               String       @id
+  githubId         Int          @unique
+  login            String
+  name             String?
+  avatarUrl        String?
+  email            String?
+  openaiApiKeyEnc  String?      @db.Text
+  anthropicApiKeyEnc String?    @db.Text
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  featureRuns      FeatureRun[]
+  tasks            Task[]
 }
 
 model Task {

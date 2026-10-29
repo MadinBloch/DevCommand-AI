@@ -1,14 +1,18 @@
-import { Bot, Cable, Shield } from "lucide-react";
+import { Bot, Cable, GitCommit, Shield } from "lucide-react";
 import type { AgentInfo } from "../../api";
 
 export function AgentsView({
   agents,
   mode,
   llmPlanner,
+  llmCoder,
+  canCommit,
 }: {
   agents: AgentInfo[];
   mode: string;
   llmPlanner: boolean;
+  llmCoder?: boolean;
+  canCommit?: boolean;
 }) {
   const available = agents.filter((a) => a.available).length;
 
@@ -16,7 +20,7 @@ export function AgentsView({
     <div className="stack rise">
       <div className="surface">
         <p className="eyebrow">Runtime</p>
-        <h3>Orchestration settings</h3>
+        <h3>Execution capability</h3>
         <div className="stat-inline">
           <div>
             <b>{mode}</b>
@@ -27,6 +31,14 @@ export function AgentsView({
             <span>LLM planner</span>
           </div>
           <div>
+            <b>{llmCoder ? "on" : "off"}</b>
+            <span>LLM coder</span>
+          </div>
+          <div>
+            <b>{canCommit ? "yes" : "no"}</b>
+            <span>Can commit</span>
+          </div>
+          <div>
             <b>
               {available}/{agents.length}
             </b>
@@ -34,45 +46,46 @@ export function AgentsView({
           </div>
         </div>
         <p className="hint" style={{ marginTop: 16 }}>
-          GitHub login does not connect coding agents. Simulation is for demos only and never creates commits.
-          Set <code>AGENT_MODE=manual</code> until real adapters are configured.
+          {canCommit ? (
+            <>
+              <GitCommit size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
+              Agents can write commits to the feature branch. PR opens only after real diffs exist.
+            </>
+          ) : (
+            <>
+              No commit engine yet. Add <code>OPENAI_API_KEY</code> or <code>ANTHROPIC_API_KEY</code>, set{" "}
+              <code>AGENT_MODE=simulate</code>, or connect <code>CODEX_API_URL</code> /{" "}
+              <code>ANTIGRAVITY_API_URL</code>.
+            </>
+          )}
         </p>
       </div>
 
       <section className="surface" aria-label="Connect coding agents">
         <p className="eyebrow">
           <Cable size={12} style={{ display: "inline", verticalAlign: -1, marginRight: 6 }} />
-          Agent connections
+          How execution works
         </p>
-        <h3>Connect a real coding agent</h3>
-        <p className="hint">
-          Codex and Antigravity are not automatically connected through GitHub OAuth. DevCommand expects a trusted
-          adapter server for each agent.
-        </p>
+        <h3>One goal → many agents → commit → PR</h3>
         <ol className="connection-steps">
+          <li>Planner splits your goal into sub-tasks with agent-specific prompts (Codex / Antigravity / human).</li>
           <li>
-            Run an adapter bridge you control that exposes a secure <code>POST /run</code> endpoint.
+            Built-in LLM coder (or external adapter) edits files and DevCommand commits them to{" "}
+            <code>devcommand/…</code>.
           </li>
-          <li>
-            Set <code>CODEX_API_URL</code> or <code>ANTIGRAVITY_API_URL</code> on the backend, plus private adapter
-            credentials when required.
-          </li>
-          <li>Restart the backend, refresh this tab, and verify agent availability. Do not enter tokens here.</li>
-          <li>
-            For manual use, copy the generated prompt into your coding tool, commit and push, then mark the task
-            complete.
-          </li>
+          <li>When the branch has commits, a pull request is opened automatically.</li>
+          <li>You approve (and optionally merge) from the run detail page.</li>
         </ol>
         <p className="hint" style={{ marginTop: 14, display: "flex", alignItems: "flex-start", gap: 8 }}>
           <Shield size={15} style={{ flexShrink: 0, marginTop: 2 }} />
-          The PR gate checks GitHub for real changed files. An empty branch cannot be approved or merged.
+          Secrets files are blocked from commits. Human approval is still required before merge.
         </p>
       </section>
 
       <div className="agent-grid">
         {agents.map((a) => (
           <div key={a.name} className={`agent ${a.available ? "ok" : "mute"}`}>
-            <Bot size={22} color={a.available ? "var(--signal)" : "var(--text-faint)"} />
+            <Bot size={22} color={a.available ? "var(--signal)" : "var(--faint)"} />
             <b>{a.name}</b>
             <span className={`pill ${a.available ? "ok" : "mute"}`}>
               {a.available ? "available" : "not connected"}

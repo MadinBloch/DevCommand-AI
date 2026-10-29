@@ -1,14 +1,14 @@
 # DevCommand AI
 
-GitHub coding orchestrator: give one feature goal, and DevCommand scans the repo, splits work into sub-tasks, generates agent prompts, assigns Codex / Antigravity / human steps, supervises progress, then waits for your approval before merge/deploy.
+GitHub coding orchestrator: give one feature goal → scan repo → split into agent tasks with prompts → agents edit & **commit** → validate diffs → open PR → human approve / merge.
 
 ## What it does
 1. **GitHub OAuth** — signed-in users with persisted profiles
 2. **Repo scan** — stack, frameworks, relevant files, test commands
 3. **Planner** — heuristic by default; optional OpenAI / Anthropic for smarter plans
-4. **Auto prompts** — per-agent prompts ready to copy or send to adapters
-5. **Supervisor** — dependency-aware queue, retries / follow-ups
-6. **Deploy gate** — opens a PR, human approve, optional merge
+4. **Multi-agent assign** — Codex / Antigravity / human steps with generated prompts
+5. **Commit engine** — built-in LLM coder or external adapters write files to `devcommand/…`
+6. **PR + approve gate** — PR opens only when the branch has real commits; human approval before merge
 
 ## Stack
 React + Vite + TypeScript · Express + TypeScript · Prisma + PostgreSQL
@@ -18,7 +18,8 @@ Requires Node.js 20+ and PostgreSQL.
 
 ```bash
 cp backend/.env.example backend/.env
-# fill GITHUB_* and DATABASE_URL; AGENT_MODE=manual is the safe default; simulate is demo-only
+# fill GITHUB_* and DATABASE_URL
+# recommended: AGENT_MODE=simulate  OR  set OPENAI_API_KEY / ANTHROPIC_API_KEY
 
 npm install
 npm --prefix backend install
@@ -36,30 +37,26 @@ Create an OAuth App at https://github.com/settings/developers.
 Local callback: `http://localhost:4000/api/auth/github/callback`  
 Never commit the OAuth client secret.
 
-### Connecting Codex and Antigravity
+### How commits & PRs work
 
-GitHub OAuth connects **repositories**, not coding agents. DevCommand does **not** automatically connect to the Codex or Antigravity applications. Its existing integrations expect independent, privately hosted **adapter bridge services** with a `POST /run` endpoint. Do **not** paste a ChatGPT login token or a Google account password into environment variables.
-
-| `AGENT_MODE` | Meaning |
+| Setup | Behavior |
 |---|---|
-| `manual` (default) | Real agent execution is unavailable until you configure adapters. Generated prompts are presented for manual work; completion requires actual branch commits. |
-| `simulate` | Demo only; no files, tests or commits are produced. Cannot create an empty PR. |
+| `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | Built-in **LLM coder** reads relevant files, proposes edits, commits via GitHub Git API |
+| `AGENT_MODE=simulate` | Demo commits under `.devcommand/` so PRs can open without an LLM key |
+| `CODEX_API_URL` / `ANTIGRAVITY_API_URL` | External adapter `POST /run`; if it returns file patches, DevCommand commits them |
+| None of the above | Prompts only — no commits → no PR (GitHub rejects empty branches) |
 
-To enable a real agent:
-1. Deploy an adapter service you operate that can invoke the chosen agent in a controlled checkout. It must accept `POST /run` and return `{ "success": true, "available": true, "logs": "...", "summary": "...", "result": {} }` **only after it really performs the task**. The response alone is not proof of code changes: DevCommand compares GitHub branches separately.
-2. Configure `CODEX_API_URL` or `ANTIGRAVITY_API_URL` to the trusted **HTTPS adapter base URL** (without `/run`). Set its corresponding `*_API_KEY` only through private server-side environment variables. These endpoints are **DevCommand adapter URLs**, not official default Codex/Antigravity URLs.
-3. Set `AGENT_MODE=manual` and restart the backend. The Agents screen shows available providers when endpoints are configured. An optional OpenAI/Anthropic planner key does **not** connect a coding agent.
-4. In the feature run, inspect the generated prompt and the agent output; verify that the agent pushed code to `devcommand/<run-id>`. If using manual mode, copy the prompt into your coding tool, push the resulting code, and mark the manual task complete.
-5. A PR can be opened only when the feature branch differs from the base branch. Approval requires an existing PR and a non-empty diff. Never treat simulated or unexecuted tasks as successful code changes.
+Flow:
+1. Create a feature run with a plain-language goal  
+2. Supervisor scans → plans → runs each sub-task agent  
+3. Successful coding steps commit to `devcommand/<run-id>`  
+4. When diffs exist vs default branch, a PR is opened  
+5. Approve (optional merge) in the UI  
 
-**Security:** Existing adapter calls pass a GitHub access token in the job payload. Use only adapter endpoints you control and trust. Never configure a public third-party webhook as an adapter, log the payload/token, or commit secrets. A future GitHub-App installation token with minimal permissions is recommended.
-
-
-Optional LLM planner:
-- `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+**Security:** Never commit secrets. Adapter payloads may include a GitHub token — only point adapters at services you control. Keep `main` protected.
 
 ## API surface (auth cookie required unless noted)
-- `GET /api/health` · `GET /api/agents`
+- `GET /api/health` · `GET /api/agents` (`canCommit`, `llmCoder`)
 - `GET /api/auth/github` · callback · `GET /api/auth/me` · `POST /api/auth/logout`
 - `GET /api/github/repos`
 - `POST /api/runs` · `GET /api/runs` · `GET /api/runs/:id`
@@ -71,4 +68,4 @@ Optional LLM planner:
 `render.yaml` defines API, static frontend, and Postgres. Set every `sync: false` value, then update `GITHUB_CALLBACK_URL`, `APP_ORIGIN`, and `VITE_API_BASE_URL` after URLs are assigned.
 
 ## Safety
-Keep `main` protected. Prefer **Approve (no merge)** until CI is green. Automatic merge is opt-in from the UI.
+Prefer **Approve (no merge)** until CI is green. Automatic merge is opt-in from the UI.

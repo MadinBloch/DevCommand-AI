@@ -1,5 +1,5 @@
 import type { FormEvent } from "react";
-import { ArrowRight, Loader2, Play } from "lucide-react";
+import { ArrowRight, GitCommit, Loader2, Play, Sparkles } from "lucide-react";
 import { Button, Input, Textarea } from "../ui";
 import type { FeatureRun, Repo, User } from "../../api";
 import { STATUS_LABEL, formatWhen, runProgress, statusClass } from "./status";
@@ -16,8 +16,12 @@ export function HomeView(props: {
   setGoal: (v: string) => void;
   busy: boolean;
   llmPlanner: boolean;
+  canCommit: boolean;
+  llmCoder: boolean;
+  agentMode: string;
   onCreate: (e: FormEvent) => void;
   onOpen: (id: string) => void;
+  onOpenAgents: () => void;
 }) {
   const writable = props.repos.filter((r) => r.permissions.push || r.permissions.admin);
   const active = props.runs.filter((r) =>
@@ -28,19 +32,44 @@ export function HomeView(props: {
 
   return (
     <div className="stack">
+      {!props.canCommit && (
+        <div className="setup-banner rise">
+          <Sparkles size={20} color="var(--signal)" />
+          <div>
+            <b>Connect a coding engine to push real commits</b>
+            <p>
+              Add your <b>OpenAI API key</b> in Settings (or set <code>AGENT_MODE=simulate</code> for demo commits).
+              Without a coding engine, PRs stay empty.
+            </p>
+            <Button variant="outline" size="sm" style={{ marginTop: 10 }} onClick={props.onOpenAgents}>
+              Open Settings
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {props.canCommit && (
+        <div className="banner ok rise" role="status">
+          <GitCommit size={15} style={{ display: "inline", verticalAlign: -2, marginRight: 6 }} />
+          Execution ready — mode <b>{props.agentMode}</b>
+          {props.llmCoder ? " · LLM coder on" : props.agentMode === "simulate" ? " · simulate commits on" : ""}.
+          One goal will scan, assign agents, commit, and open a PR when diffs exist.
+        </div>
+      )}
+
       <section className="hero-band rise">
         <div>
           <p className="eyebrow">Signed in as @{props.user.login}</p>
           <h2>
-            One goal in. <span>Full orchestration out.</span>
+            Ship features with <span>multi-agent orchestration</span>
           </h2>
           <p>
-            Scan the repo, split the work, generate agent prompts, supervise progress, then wait for your
-            approval before merge or deploy — history stays intact.
+            Describe one goal. DevCommand scans the repo, splits work, generates prompts, runs agents, commits
+            validated changes, opens a PR — and keeps full history.
           </p>
         </div>
         <div className="phase-rail">
-          {["Scan", "Plan", "Assign", "Supervise", "Test", "Deploy"].map((p, i) => (
+          {["Scan", "Plan", "Assign", "Commit", "Validate", "PR"].map((p, i) => (
             <div key={p} className="phase">
               <b>0{i + 1}</b>
               <span>{p}</span>
@@ -110,26 +139,29 @@ export function HomeView(props: {
             placeholder="In this repo, update the feature so users can invite teammates from settings. Keep existing auth. Add tests."
           />
           <p className="hint">
-            {props.llmPlanner
-              ? "LLM planner enabled — smarter plans when your API key is configured."
-              : "Heuristic planner active. Optional: set OPENAI_API_KEY for smarter plans."}
+            {props.llmPlanner || props.llmCoder
+              ? "LLM enabled for planning and/or coding commits."
+              : "Heuristic planner active. Add an API key for smarter plans and real file edits."}
           </p>
           <Button type="submit" disabled={props.busy || !writable.length}>
             {props.busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-            Scan, plan & assign
+            Scan, assign & commit
           </Button>
         </form>
 
         <div className="surface">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
             <div>
-              <p className="eyebrow">History pulse</p>
+              <p className="eyebrow">History</p>
               <h3>Recent runs</h3>
             </div>
             <span className="pill mute">{props.runs.length} total</span>
           </div>
           {props.runs.length === 0 ? (
-            <p className="empty">No feature runs yet. Launch your first goal on the left — it will appear here forever in history.</p>
+            <div className="empty-state">
+              <h4>No runs yet</h4>
+              <p>Launch your first goal — every orchestration is saved in Feature Runs history.</p>
+            </div>
           ) : (
             <ul className="run-list">
               {props.runs.slice(0, 7).map((r) => {
@@ -159,7 +191,7 @@ export function HomeView(props: {
           )}
           {props.runs.length > 7 && (
             <p className="hint" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6 }}>
-              Open Feature Runs for full history <ArrowRight size={14} />
+              Full archive in Feature Runs <ArrowRight size={14} />
             </p>
           )}
         </div>

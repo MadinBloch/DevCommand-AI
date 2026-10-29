@@ -1,4 +1,4 @@
-export type AgentName = "codex" | "antigravity" | "human" | "simulated";
+export type AgentName = "codex" | "antigravity" | "human" | "simulated" | "llm";
 
 export type AgentRunInput = {
   agent: AgentName | string;
@@ -9,6 +9,10 @@ export type AgentRunInput = {
   goal: string;
   token: string;
   attempt: number;
+  relevantFiles?: string[];
+  /** Per-user keys from Settings UI (preferred over server env). */
+  openaiApiKey?: string | null;
+  anthropicApiKey?: string | null;
 };
 
 export type AgentRunResult = {

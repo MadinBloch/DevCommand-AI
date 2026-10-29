@@ -1,6 +1,5 @@
 const API = ((import.meta as any).env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "";
 
-// Avoid duplicating "/api" when the configured base URL already includes it.
 function apiPath(path: string): string {
   if (API.endsWith("/api") && path.startsWith("/api/")) {
     return API + path.slice(4);
@@ -26,7 +25,33 @@ export const api = {
   me: () => req<{ user: User | null }>("/api/auth/me"),
   logout: () => req("/api/auth/logout", { method: "POST" }),
   repos: () => req<Repo[]>("/api/github/repos"),
-  agents: () => req<{ agents: AgentInfo[]; mode: string; llmPlanner: boolean }>("/api/agents"),
+  agents: () =>
+    req<{
+      agents: AgentInfo[];
+      mode: string;
+      llmPlanner: boolean;
+      llmCoder?: boolean;
+      canCommit?: boolean;
+      hasUserOpenAiKey?: boolean;
+    }>("/api/agents"),
+  settings: () =>
+    req<{
+      openaiApiKeyMasked: string | null;
+      hasOpenAiKey: boolean;
+      anthropicApiKeyMasked: string | null;
+      hasAnthropicKey: boolean;
+      serverHasOpenAiKey: boolean;
+      login: string;
+    }>("/api/settings"),
+  saveSettings: (body: {
+    openaiApiKey?: string | null;
+    anthropicApiKey?: string | null;
+    clearOpenAiKey?: boolean;
+    clearAnthropicKey?: boolean;
+  }) => req<{ ok: boolean; hasOpenAiKey: boolean; openaiApiKeyMasked: string | null }>("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  }),
   runs: () => req<FeatureRun[]>("/api/runs"),
   run: (id: string) => req<FeatureRunDetail>(`/api/runs/${id}`),
   createRun: (body: { repoFullName: string; title: string; goal: string; autoStart?: boolean }) =>

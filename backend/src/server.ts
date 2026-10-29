@@ -9,7 +9,7 @@ import { z } from "zod";
 import { prisma } from "./db.js";
 import { gh } from "./github.js";
 import { createPlan } from "./services/planner.js";
-import { listAgents } from "./agents/registry.js";
+import { executionCapability, listAgents } from "./agents/registry.js";
 import {
   approveRun,
   clearUserToken,
@@ -18,6 +18,8 @@ import {
   startFeatureRun,
   startSupervisorLoop,
 } from "./services/supervisor.js";
+import { getUserLlmKeys } from "./services/userKeys.js";
+import { encryptSecret, looksLikeOpenAiKey, maskKey } from "./services/secrets.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -94,15 +96,85 @@ app.get("/api/health", (_q, s) =>
     ok: true,
     app: "DevCommand AI",
     agentMode: process.env.AGENT_MODE || "manual",
-    phases: ["scan", "plan", "assign", "supervise", "test", "approve", "deploy"],
+    canCommit: executionCapability().canCommit,
+    phases: ["scan", "plan", "assign", "commit", "validate", "pr", "approve", "deploy"],
   })
 );
 
-app.get("/api/agents", (_q, res) => {
+app.get("/api/agents", async (req, res) => {
+  let userKeys: { openaiApiKey?: string | null; anthropicApiKey?: string | null } = {};
+  if (req.session.githubUser) {
+    userKeys = await getUserLlmKeys(String(req.session.githubUser.id));
+  }
+  const cap = executionCapability(userKeys);
   res.json({
-    agents: listAgents(),
-    mode: process.env.AGENT_MODE || "manual",
-    llmPlanner: Boolean(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY),
+    agents: listAgents(userKeys),
+    mode: cap.mode,
+    llmPlanner: Boolean(userKeys.openaiApiKey || userKeys.anthropicApiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY),
+    llmCoder: cap.llmCoder,
+    canCommit: cap.canCommit,
+    hasUserOpenAiKey: Boolean(userKeys.openaiApiKey),
+  });
+});
+
+app.get("/api/settings", needAuth, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: String(req.session.githubUser!.id) } });
+  const keys = await getUserLlmKeys(String(req.session.githubUser!.id));
+  res.json({
+    openaiApiKeyMasked: maskKey(keys.openaiApiKey),
+    hasOpenAiKey: Boolean(keys.openaiApiKey),
+    anthropicApiKeyMasked: maskKey(keys.anthropicApiKey),
+    hasAnthropicKey: Boolean(keys.anthropicApiKey),
+    serverHasOpenAiKey: Boolean(process.env.OPENAI_API_KEY),
+    login: user?.login || req.session.githubUser!.login,
+  });
+});
+
+const settingsSchema = z.object({
+  openaiApiKey: z.string().trim().max(200).optional().nullable(),
+  anthropicApiKey: z.string().trim().max(200).optional().nullable(),
+  clearOpenAiKey: z.boolean().optional(),
+  clearAnthropicKey: z.boolean().optional(),
+});
+
+app.put("/api/settings", needAuth, async (req, res) => {
+  const p = settingsSchema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: "Invalid settings", details: p.error.flatten() });
+    return;
+  }
+  const userId = String(req.session.githubUser!.id);
+  await upsertUser(req.session.githubUser as any);
+
+  const data: { openaiApiKeyEnc?: string | null; anthropicApiKeyEnc?: string | null } = {};
+
+  if (p.data.clearOpenAiKey) data.openaiApiKeyEnc = null;
+  else if (typeof p.data.openaiApiKey === "string" && p.data.openaiApiKey.length > 0) {
+    if (!looksLikeOpenAiKey(p.data.openaiApiKey) && !p.data.openaiApiKey.startsWith("sk-")) {
+      res.status(400).json({ error: "OpenAI key should look like sk-…" });
+      return;
+    }
+    data.openaiApiKeyEnc = encryptSecret(p.data.openaiApiKey.trim());
+  }
+
+  if (p.data.clearAnthropicKey) data.anthropicApiKeyEnc = null;
+  else if (typeof p.data.anthropicApiKey === "string" && p.data.anthropicApiKey.length > 0) {
+    data.anthropicApiKeyEnc = encryptSecret(p.data.anthropicApiKey.trim());
+  }
+
+  if (!Object.keys(data).length) {
+    res.status(400).json({ error: "Nothing to update" });
+    return;
+  }
+
+  await prisma.user.update({ where: { id: userId }, data });
+  const keys = await getUserLlmKeys(userId);
+  res.json({
+    ok: true,
+    openaiApiKeyMasked: maskKey(keys.openaiApiKey),
+    hasOpenAiKey: Boolean(keys.openaiApiKey),
+    anthropicApiKeyMasked: maskKey(keys.anthropicApiKey),
+    hasAnthropicKey: Boolean(keys.anthropicApiKey),
   });
 });
 

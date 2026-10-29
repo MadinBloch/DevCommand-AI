@@ -3,6 +3,7 @@ import {
   Bot,
   GitBranch,
   Github,
+  KeyRound,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -20,8 +21,9 @@ import { RunsList } from "./components/workspace/RunsTab";
 import { RunDetail } from "./components/workspace/RunDetailTab";
 import { ReposView } from "./components/workspace/RepositoriesTab";
 import { AgentsView } from "./components/workspace/AgentsTab";
+import { SettingsView } from "./components/workspace/SettingsTab";
 
-type View = "home" | "runs" | "run" | "agents" | "repos";
+type View = "home" | "runs" | "run" | "agents" | "repos" | "settings";
 
 export default function App() {
   const [view, setView] = useState<View>("home");
@@ -31,6 +33,8 @@ export default function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [agentMode, setAgentMode] = useState("manual");
   const [llmPlanner, setLlmPlanner] = useState(false);
+  const [llmCoder, setLlmCoder] = useState(false);
+  const [canCommit, setCanCommit] = useState(false);
   const [activeRun, setActiveRun] = useState<FeatureRunDetail | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -50,6 +54,8 @@ export default function App() {
       setAgents(ag.agents);
       setAgentMode(ag.mode);
       setLlmPlanner(ag.llmPlanner);
+      setLlmCoder(Boolean(ag.llmCoder));
+      setCanCommit(Boolean(ag.canCommit));
       if (u) {
         const [rr, rn] = await Promise.all([api.repos(), api.runs()]);
         setRepos(rr);
@@ -192,6 +198,15 @@ export default function App() {
             icon={<Bot size={16} />}
             label="Agents"
           />
+          <NavBtn
+            active={view === "settings"}
+            onClick={() => {
+              setView("settings");
+              setMobileNavOpen(false);
+            }}
+            icon={<KeyRound size={16} />}
+            label="Settings"
+          />
         </nav>
 
         <div className="side-card">
@@ -226,6 +241,7 @@ export default function App() {
               {view === "run" && (activeRun?.title || "Run detail")}
               {view === "repos" && "Repositories"}
               {view === "agents" && "Agent registry"}
+              {view === "settings" && "Settings"}
             </h1>
           </div>
           <div className="top-actions">
@@ -239,9 +255,8 @@ export default function App() {
             >
               <Menu size={18} />
             </Button>
-            <Badge variant={agentMode === "simulate" ? "outline" : "default"}>
-              mode · {agentMode}
-              {agentMode === "simulate" ? " (demo)" : ""}
+            <Badge variant={canCommit ? "default" : "outline"}>
+              {canCommit ? "commits on" : "commits off"} · {agentMode}
             </Badge>
             <Button variant="outline" onClick={bootstrap} disabled={loading}>
               <RefreshCw size={15} /> Refresh
@@ -256,6 +271,7 @@ export default function App() {
               ["runs", "Feature Runs", Workflow],
               ["repos", "Repositories", GitBranch],
               ["agents", "AI Agents", Bot],
+              ["settings", "Settings", KeyRound],
             ] as const
           ).map(([id, label, Icon]) => (
             <button
@@ -300,8 +316,12 @@ export default function App() {
             setGoal={setGoal}
             busy={busy}
             llmPlanner={llmPlanner}
+            canCommit={canCommit}
+            llmCoder={llmCoder}
+            agentMode={agentMode}
             onCreate={createRun}
             onOpen={openRun}
+            onOpenAgents={() => setView("settings")}
           />
         )}
         {view === "runs" && <RunsList runs={runs} onOpen={openRun} />}
@@ -318,7 +338,16 @@ export default function App() {
           />
         )}
         {view === "repos" && <ReposView repos={repos} />}
-        {view === "agents" && <AgentsView agents={agents} mode={agentMode} llmPlanner={llmPlanner} />}
+        {view === "agents" && (
+          <AgentsView
+            agents={agents}
+            mode={agentMode}
+            llmPlanner={llmPlanner}
+            llmCoder={llmCoder}
+            canCommit={canCommit}
+          />
+        )}
+        {view === "settings" && <SettingsView onSaved={() => void bootstrap()} />}
       </main>
     </div>
   );

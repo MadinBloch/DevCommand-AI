@@ -2,6 +2,7 @@ import { prisma } from "../db.js";
 import { runAgent } from "../agents/registry.js";
 import { scanRepository, type RepoScan } from "./scanner.js";
 import { buildFollowUpPrompt, createFeaturePlan } from "./planner.js";
+import { getUserLlmKeys } from "./userKeys.js";
 import {
   buildPrBody,
   ensureFeatureBranch,
@@ -66,6 +67,8 @@ export async function processRun(runId: string) {
   }
 
   try {
+    const llmKeys = await getUserLlmKeys(run.userId);
+
     // Phase 1–2: scan
     await prisma.featureRun.update({ where: { id: runId }, data: { status: "scanning" } });
     const scan = await scanRepository(token, run.repoFullName, run.goal);
@@ -79,7 +82,7 @@ export async function processRun(runId: string) {
     // Phase 3: plan + prompts
     const existing = await prisma.subTask.count({ where: { featureRunId: runId } });
     if (!existing) {
-      const plan = await createFeaturePlan(run.goal, scan);
+      const plan = await createFeaturePlan(run.goal, scan, llmKeys);
       await prisma.subTask.createMany({
         data: plan.map((step, i) => ({
           featureRunId: runId,
@@ -96,7 +99,7 @@ export async function processRun(runId: string) {
     }
 
     await prisma.featureRun.update({ where: { id: runId }, data: { status: "running" } });
-    await drainSubTasks(runId, token, scan);
+    await drainSubTasks(runId, token, scan, llmKeys);
   } catch (e: any) {
     await prisma.featureRun.update({
       where: { id: runId },
@@ -105,9 +108,15 @@ export async function processRun(runId: string) {
   }
 }
 
-async function drainSubTasks(runId: string, token: string, scan: RepoScan) {
+async function drainSubTasks(
+  runId: string,
+  token: string,
+  scan: RepoScan,
+  llmKeys?: { openaiApiKey?: string | null; anthropicApiKey?: string | null }
+) {
   const run = await prisma.featureRun.findUnique({ where: { id: runId } });
   if (!run) return;
+  const keys = llmKeys || (await getUserLlmKeys(run.userId));
 
   for (let guard = 0; guard < 40; guard++) {
     const fresh = await prisma.featureRun.findUnique({
@@ -171,6 +180,9 @@ async function drainSubTasks(runId: string, token: string, scan: RepoScan) {
       goal: fresh.goal,
       token,
       attempt: current.attempt + 1,
+      relevantFiles: Array.isArray(scan.relevantFiles) ? scan.relevantFiles : [],
+      openaiApiKey: keys.openaiApiKey,
+      anthropicApiKey: keys.anthropicApiKey,
     });
 
     if (result.needsHuman) {
@@ -412,7 +424,7 @@ export async function approveRun(runId: string, approver: string, merge: boolean
       summary: "",
     };
     await prisma.featureRun.update({ where: { id: runId }, data: { status: "running" } });
-    await drainSubTasks(runId, token, scan);
+    await drainSubTasks(runId, token, scan, await getUserLlmKeys(run.userId));
   }
 
   const after = await prisma.featureRun.findUnique({ where: { id: runId }, include: { subTasks: true } });

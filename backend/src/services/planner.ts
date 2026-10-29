@@ -169,9 +169,12 @@ function heuristicPlan(goal: string, scan: RepoScan): PlannedStep[] {
   });
 }
 
-async function llmPlan(goal: string, scan: RepoScan): Promise<PlannedStep[] | null> {
-  const key = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
-  if (!key) return null;
+export type LlmKeys = { openaiApiKey?: string | null; anthropicApiKey?: string | null };
+
+async function llmPlan(goal: string, scan: RepoScan, keys?: LlmKeys): Promise<PlannedStep[] | null> {
+  const openaiKey = keys?.openaiApiKey || process.env.OPENAI_API_KEY;
+  const anthropicKey = keys?.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
+  if (!openaiKey && !anthropicKey) return null;
 
   const system = `You are DevCommand's planner. Return ONLY valid JSON array of steps.
 Each step: {title, objective, agent, criteria, dependsOnOrders}
@@ -182,11 +185,11 @@ dependsOnOrders is an array of earlier 0-based indexes.`;
   const user = `Goal: ${goal}\n\nRepo scan:\n${JSON.stringify(scan, null, 2)}`;
 
   try {
-    if (process.env.OPENAI_API_KEY) {
+    if (openaiKey) {
       const r = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
-          Authorization: "Bearer " + process.env.OPENAI_API_KEY,
+          Authorization: "Bearer " + openaiKey,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -205,11 +208,11 @@ dependsOnOrders is an array of earlier 0-based indexes.`;
       return normalizeLlmSteps(content, goal, scan);
     }
 
-    if (process.env.ANTHROPIC_API_KEY) {
+    if (anthropicKey) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "x-api-key": anthropicKey,
           "anthropic-version": "2023-06-01",
           "Content-Type": "application/json",
         },
@@ -311,8 +314,8 @@ export function createPlan(prompt: string) {
   return items;
 }
 
-export async function createFeaturePlan(goal: string, scan: RepoScan): Promise<PlannedStep[]> {
-  const llm = await llmPlan(goal, scan);
+export async function createFeaturePlan(goal: string, scan: RepoScan, keys?: LlmKeys): Promise<PlannedStep[]> {
+  const llm = await llmPlan(goal, scan, keys);
   return llm || heuristicPlan(goal, scan);
 }
 
