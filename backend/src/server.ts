@@ -372,6 +372,15 @@ app.post("/api/runs", needAuth, async (req, res) => {
       return;
     }
     await upsertUser(req.session.githubUser as any);
+    const userKeys = await getUserLlmKeys(String(req.session.githubUser!.id));
+    const cap = executionCapability(userKeys);
+    if (!cap.canCommit) {
+      res.status(400).json({
+        error:
+          "No coding engine connected. Add your OpenAI API key in Settings (or set OPENAI_API_KEY / an agent adapter on the server).",
+      });
+      return;
+    }
     const run = await prisma.featureRun.create({
       data: {
         userId: String(req.session.githubUser!.id),

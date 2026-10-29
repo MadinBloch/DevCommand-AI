@@ -1,10 +1,9 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Bot,
   GitBranch,
   Github,
   KeyRound,
-  LayoutDashboard,
   Loader2,
   LogOut,
   Menu,
@@ -15,26 +14,23 @@ import {
   X,
 } from "lucide-react";
 import { Badge, Button } from "./components/ui";
-import { api, type AgentInfo, type FeatureRun, type FeatureRunDetail, type Repo, type User } from "./api";
-import { DashboardHome } from "./dashboard/DashboardHome";
+import { api, type AgentInfo, type FeatureRun, type Repo, type User } from "./api";
+import { RepoChat } from "./chat/RepoChat";
 import { RunsList } from "./components/workspace/RunsTab";
-import { RunDetail } from "./components/workspace/RunDetailTab";
-import { ReposView } from "./components/workspace/RepositoriesTab";
-import { AgentsView } from "./components/workspace/AgentsTab";
 import { SettingsView } from "./components/workspace/SettingsTab";
+import { AgentsView } from "./components/workspace/AgentsTab";
 
-type Page = "dashboard" | "runs" | "run" | "repos" | "agents" | "settings";
+type Page = "repos" | "chat" | "history" | "agents" | "settings";
 
-const NAV: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "runs", label: "Runs", icon: Workflow },
+const NAV: Array<{ id: Exclude<Page, "chat">; label: string; icon: typeof GitBranch }> = [
   { id: "repos", label: "Repositories", icon: GitBranch },
+  { id: "history", label: "History", icon: Workflow },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "settings", label: "Settings", icon: KeyRound },
 ];
 
 export default function App() {
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>("repos");
   const [user, setUser] = useState<User | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [runs, setRuns] = useState<FeatureRun[]>([]);
@@ -43,15 +39,13 @@ export default function App() {
   const [llmPlanner, setLlmPlanner] = useState(false);
   const [llmCoder, setLlmCoder] = useState(false);
   const [canCommit, setCanCommit] = useState(false);
-  const [activeRun, setActiveRun] = useState<FeatureRunDetail | null>(null);
+  const [activeRepo, setActiveRepo] = useState<Repo | null>(null);
+  const [chatRunId, setChatRunId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-
-  const [repo, setRepo] = useState("");
-  const [title, setTitle] = useState("");
-  const [goal, setGoal] = useState("");
+  const [repoQuery, setRepoQuery] = useState("");
 
   async function bootstrap() {
     setLoading(true);
@@ -68,7 +62,6 @@ export default function App() {
         const [rr, rn] = await Promise.all([api.repos(), api.runs()]);
         setRepos(rr);
         setRuns(rn);
-        if (!repo && rr[0]) setRepo(rr[0].fullName);
       }
     } catch (e: any) {
       setError(e.message || "API unavailable");
@@ -81,59 +74,17 @@ export default function App() {
     void bootstrap();
   }, []);
 
-  useEffect(() => {
-    if (
-      !activeRun ||
-      !["queued", "scanning", "planning", "running", "testing", "reviewing", "deploying"].includes(activeRun.status)
-    )
-      return;
-    const t = setInterval(async () => {
-      try {
-        const r = await api.run(activeRun.id);
-        setActiveRun(r);
-        setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...r } : x)));
-      } catch {
-        /* ignore */
-      }
-    }, 2500);
-    return () => clearInterval(t);
-  }, [activeRun?.id, activeRun?.status]);
-
   function go(next: Page) {
     setPage(next);
     setNavOpen(false);
   }
 
-  async function openRun(id: string) {
-    setBusy(true);
+  function openRepo(r: Repo, runId?: string) {
+    setActiveRepo(r);
+    setChatRunId(runId || null);
+    setPage("chat");
+    setNavOpen(false);
     setError("");
-    try {
-      const r = await api.run(id);
-      setActiveRun(r);
-      go("run");
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createRun(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const { run } = await api.createRun({ repoFullName: repo, title, goal, autoStart: true });
-      setTitle("");
-      setGoal("");
-      setRuns((prev) => [run, ...prev]);
-      setActiveRun(run);
-      go("run");
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function logout() {
@@ -141,18 +92,20 @@ export default function App() {
     setUser(null);
     setRepos([]);
     setRuns([]);
-    setActiveRun(null);
-    setPage("dashboard");
+    setActiveRepo(null);
+    setPage("repos");
   }
 
-  const titles: Record<Page, string> = {
-    dashboard: "Dashboard",
-    runs: "Runs",
-    run: activeRun?.title || "Run detail",
-    repos: "Repositories",
-    agents: "Agents",
-    settings: "Settings",
-  };
+  const writable = repos.filter((r) => r.permissions.push || r.permissions.admin);
+  const filtered = writable.filter((r) => {
+    const q = repoQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      r.fullName.toLowerCase().includes(q) ||
+      (r.description || "").toLowerCase().includes(q) ||
+      (r.language || "").toLowerCase().includes(q)
+    );
+  });
 
   if (loading) {
     return (
@@ -178,7 +131,7 @@ export default function App() {
             <span className="mark">DC</span>
             <div>
               <strong>DevCommand</strong>
-              <em>WORKSPACE</em>
+              <em>CHAT WORKSPACE</em>
             </div>
           </div>
           <button type="button" className="nav-close ghost icon" onClick={() => setNavOpen(false)} aria-label="Close">
@@ -190,10 +143,10 @@ export default function App() {
           {NAV.map((item) => (
             <NavItem
               key={item.id}
-              active={page === item.id || (item.id === "runs" && page === "run")}
+              active={page === item.id || (item.id === "repos" && page === "chat")}
               icon={<item.icon size={17} />}
               label={item.label}
-              badge={item.id === "runs" ? runs.length : undefined}
+              badge={item.id === "history" ? runs.length : undefined}
               onClick={() => go(item.id)}
             />
           ))}
@@ -219,23 +172,17 @@ export default function App() {
             <Button variant="outline" size="icon" className="mobile-toggle" aria-label="Open menu" onClick={() => setNavOpen(true)}>
               <Menu size={18} />
             </Button>
-            <div>
-              {page === "run" && activeRun ? (
-                <div className="crumb">
-                  <button type="button" onClick={() => go("runs")}>
-                    Runs
-                  </button>
-                  <span>/</span>
-                  <strong>{activeRun.title}</strong>
-                </div>
-              ) : (
-                <h1>{titles[page]}</h1>
-              )}
-            </div>
+            <h1>
+              {page === "repos" && "Repositories"}
+              {page === "chat" && (activeRepo?.fullName || "Chat")}
+              {page === "history" && "History"}
+              {page === "agents" && "Agents"}
+              {page === "settings" && "Settings"}
+            </h1>
           </div>
           <div className="app-topbar-right">
             <Badge variant={canCommit ? "default" : "outline"}>
-              {canCommit ? "ready" : "setup needed"} · {agentMode}
+              {canCommit ? "API ready" : "add OpenAI key"} · {agentMode}
             </Badge>
             <Button variant="outline" onClick={bootstrap}>
               <RefreshCw size={15} /> Refresh
@@ -243,46 +190,112 @@ export default function App() {
           </div>
         </header>
 
-        <div className="app-content">
+        <div className={`app-content ${page === "chat" ? "app-content-flush" : ""}`}>
           {error && <div className="banner bad">{error}</div>}
 
-          {page === "dashboard" && (
-            <DashboardHome
-              user={user}
-              runs={runs}
-              repos={repos}
-              repo={repo}
-              setRepo={setRepo}
-              title={title}
-              setTitle={setTitle}
-              goal={goal}
-              setGoal={setGoal}
-              busy={busy}
-              canCommit={canCommit}
-              llmCoder={llmCoder}
-              agentMode={agentMode}
-              onCreate={createRun}
-              onOpen={openRun}
-              onNavigate={(p) => go(p)}
-            />
+          {page === "repos" && (
+            <div className="repo-home rise">
+              <div className="dash-welcome">
+                <div>
+                  <p className="eyebrow">Start here</p>
+                  <h1>Pick a repository</h1>
+                  <p className="dash-sub">
+                    Repo pe click karo → chat khulegi. Wahan task likho, plan + AI assignment live dikhega, phir aap
+                    Approve karke merge karoge.
+                  </p>
+                </div>
+              </div>
+
+              {!canCommit && (
+                <div className="dash-alert">
+                  <KeyRound size={18} />
+                  <div>
+                    <b>Pehle OpenAI key connect karo</b>
+                    <p>
+                      Bina key ke task start nahi hoga. Pehle jo PR bani thi woh simulate/demo mode ki wajah se thi —
+                      asli coding agent nahi.
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => go("settings")}>
+                    Settings
+                  </Button>
+                </div>
+              )}
+
+              <div className="toolbar">
+                <div className="search" style={{ position: "relative", flex: 1 }}>
+                  <input
+                    className="ui-input"
+                    style={{ paddingLeft: 12 }}
+                    value={repoQuery}
+                    onChange={(e) => setRepoQuery(e.target.value)}
+                    placeholder="Search repos…"
+                    aria-label="Search repositories"
+                  />
+                </div>
+              </div>
+
+              {!filtered.length ? (
+                <div className="dash-empty">
+                  <h3>No writable repos</h3>
+                  <p>GitHub pe aise repos chahiye jahan aapke paas push access ho.</p>
+                </div>
+              ) : (
+                <ul className="repo-pick-grid">
+                  {filtered.map((r) => (
+                    <li key={r.id}>
+                      <button type="button" className="repo-pick" onClick={() => openRepo(r)}>
+                        <b>{r.fullName}</b>
+                        <span>
+                          {r.language || "n/a"} · {r.defaultBranch}
+                          {r.private ? " · private" : ""}
+                        </span>
+                        <p>{r.description || "Open chat workspace"}</p>
+                        <em>Open chat →</em>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
-          {page === "runs" && <RunsList runs={runs} onOpen={openRun} />}
-          {page === "run" && activeRun && (
-            <RunDetail
-              run={activeRun}
+
+          {page === "chat" && activeRepo && (
+            <RepoChat
+              key={activeRepo.fullName + ":" + (chatRunId || "new")}
+              repo={activeRepo}
+              runs={runs}
+              canCommit={canCommit}
               busy={busy}
               setBusy={setBusy}
               setError={setError}
-              onUpdate={(r) => {
-                setActiveRun(r);
-                setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...r } : x)));
+              onBack={() => go("repos")}
+              onOpenSettings={() => go("settings")}
+              onRunsChange={setRuns}
+              initialRunId={chatRunId}
+            />
+          )}
+
+          {page === "history" && (
+            <RunsList
+              runs={runs}
+              onOpen={async (id) => {
+                try {
+                  const run = await api.run(id);
+                  const match = repos.find((r) => r.fullName === run.repoFullName);
+                  if (match) openRepo(match, id);
+                  else setError("Repo not in your writable list: " + run.repoFullName);
+                } catch (e: any) {
+                  setError(e.message);
+                }
               }}
             />
           )}
-          {page === "repos" && <ReposView repos={repos} />}
+
           {page === "agents" && (
             <AgentsView agents={agents} mode={agentMode} llmPlanner={llmPlanner} llmCoder={llmCoder} canCommit={canCommit} />
           )}
+
           {page === "settings" && <SettingsView onSaved={() => void bootstrap()} />}
         </div>
       </div>
@@ -320,34 +333,34 @@ function LoginPage({ error, onRetry }: { error: string; onRetry: () => void }) {
           <span className="mark">DC</span>
           <div>
             <strong>DevCommand AI</strong>
-            <em>BUILD · REVIEW · SHIP</em>
+            <em>REPO · CHAT · SHIP</em>
           </div>
         </div>
         <div>
           <h1>
-            Your AI coding <span>control plane</span>
+            Chat with your <span>repo</span>
           </h1>
-          <p>One goal in. Multi-agent plan, commits, PR, and approval — with full run history.</p>
+          <p>Repo select karo, task chat mein likho, plan + multi-AI assign dekho, phir Approve karke merge.</p>
           <div className="login-orbit">
-            <span>Scan</span>
-            <span>Assign</span>
-            <span>Commit</span>
+            <span>Pick repo</span>
+            <span>Chat task</span>
+            <span>See plan</span>
             <span>Approve</span>
           </div>
         </div>
       </div>
       <div className="login-panel">
-        <h2>Sign in to your workspace</h2>
-        <p>Connect GitHub to load repos and continue where you left off.</p>
+        <h2>Sign in</h2>
+        <p>GitHub se writable repos load hongi. OpenAI key Settings se lagegi.</p>
         <ul className="login-steps">
           <li>
-            <Sparkles size={16} /> Plan work from a single goal
+            <Sparkles size={16} /> Repo chat workspace
           </li>
           <li>
-            <Bot size={16} /> Assign coding agents automatically
+            <Bot size={16} /> Auto plan + agent assignment
           </li>
           <li>
-            <Rocket size={16} /> Review PRs before merge
+            <Rocket size={16} /> Approve before merge
           </li>
         </ul>
         {error && <div className="banner bad">{error}</div>}

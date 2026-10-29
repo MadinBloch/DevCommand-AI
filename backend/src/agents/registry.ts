@@ -92,11 +92,10 @@ async function executeCodingAgent(input: AgentRunInput, kind: "codex" | "antigra
 }
 
 function codingAvailable(userKeys?: { openaiApiKey?: string | null; anthropicApiKey?: string | null }) {
+  // Real execution only: user/server LLM key or external adapter.
+  // AGENT_MODE=simulate alone does NOT count — it only writes .devcommand demo files.
   return Boolean(
-    process.env.CODEX_API_URL ||
-      process.env.ANTIGRAVITY_API_URL ||
-      llmCoderAvailable(userKeys) ||
-      process.env.AGENT_MODE === "simulate"
+    process.env.CODEX_API_URL || process.env.ANTIGRAVITY_API_URL || llmCoderAvailable(userKeys)
   );
 }
 
