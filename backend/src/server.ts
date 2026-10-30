@@ -163,7 +163,19 @@ app.get("/api/agents/account-login-status", needAuth, async (_req, res) => {
   const statuses = await Promise.all(binaries.map(async ({ provider, binary }) => {
     const probe = await probeCli(binary);
     if (!probe.installed) return { provider, installed: false, authenticated: false, message: "CLI not installed on worker." };
-    if (provider !== "codex") return { provider, installed: true, authenticated: null, message: "Account login requires worker-side interactive setup. No authenticated status inferred from installation." };
+    if (provider === "claude") {
+      const result = await runCli({ command: "claude", args: ["auth", "status"], cwd: process.cwd(), timeoutMs: 10000 });
+      if (result.code !== 0 || result.timedOut) return { provider, installed: true, authenticated: false, message: "Claude Code CLI authentication not verified." };
+      try {
+        const status = JSON.parse(result.stdout) as { loggedIn?: boolean };
+        return { provider, installed: true, authenticated: status.loggedIn === true, message: status.loggedIn === true ? "Claude Code CLI reports authenticated worker account." : "Claude Code CLI is not signed in." };
+      } catch {
+        return { provider, installed: true, authenticated: null, message: "Claude CLI status returned an unrecognized response; cannot verify authentication." };
+      }
+    }
+    if (provider === "gemini") {
+      return { provider, installed: true, authenticated: null, message: "Gemini CLI is installed; browser login cannot be verified reliably by version check. Test a saved Gemini API key in Settings instead, or use an isolated CLI smoke test." };
+    }
     const result = await runCli({ command: "codex", args: ["login", "status"], cwd: process.cwd(), timeoutMs: 10000 });
     return { provider, installed: true, authenticated: result.code === 0 && !result.timedOut,
       message: result.code === 0 && !result.timedOut
