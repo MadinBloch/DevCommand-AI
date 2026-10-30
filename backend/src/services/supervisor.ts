@@ -1,8 +1,7 @@
 import { prisma } from "../db.js";
-import { runAgent } from "../agents/registry.js";
 import { scanRepository, type RepoScan } from "./scanner.js";
-import { buildFollowUpPrompt, createFeaturePlan } from "./planner.js";
-import { getUserLlmKeys } from "./userKeys.js";
+import { createFeaturePlan } from "./planner.js";
+import { getPersistedGithubToken, getUserLlmKeys } from "./userKeys.js";
 import {
   buildPrBody,
   ensureFeatureBranch,
@@ -12,8 +11,9 @@ import {
   checkBranchDiff,
   hasReviewableChanges,
 } from "./deploy.js";
-
-type TokenProvider = (userId: string) => string | undefined;
+import { enqueueSchedule, enqueueSubTask } from "./queue.js";
+import { writeAudit } from "./audit.js";
+import { getPrCiStatus } from "./ciStatus.js";
 
 const tokenStore = new Map<string, string>();
 
@@ -29,7 +29,9 @@ export function getUserToken(userId: string) {
   return tokenStore.get(userId);
 }
 
-const getToken: TokenProvider = (userId) => tokenStore.get(userId);
+async function resolveToken(userId: string): Promise<string | undefined> {
+  return tokenStore.get(userId) || (await getPersistedGithubToken(userId)) || undefined;
+}
 
 let ticking = false;
 
@@ -37,8 +39,10 @@ export async function startFeatureRun(runId: string) {
   const run = await prisma.featureRun.findUnique({ where: { id: runId }, include: { subTasks: true } });
   if (!run) throw new Error("Feature run not found");
   if (!["queued", "failed"].includes(run.status) && run.subTasks.length) {
-    // Resume running pipeline
-    if (["scanning", "planning", "running", "testing", "reviewing"].includes(run.status)) return run;
+    if (["scanning", "planning", "running", "testing", "reviewing"].includes(run.status)) {
+      await enqueueSchedule({ featureRunId: runId, userId: run.userId });
+      return run;
+    }
   }
 
   await prisma.featureRun.update({
@@ -46,7 +50,6 @@ export async function startFeatureRun(runId: string) {
     data: { status: "queued", errorMessage: null },
   });
 
-  // Kick async pipeline (don't block HTTP)
   void processRun(runId);
   return prisma.featureRun.findUnique({
     where: { id: runId },
@@ -57,19 +60,22 @@ export async function startFeatureRun(runId: string) {
 export async function processRun(runId: string) {
   const run = await prisma.featureRun.findUnique({ where: { id: runId } });
   if (!run) return;
-  const token = getToken(run.userId);
+  const token = await resolveToken(run.userId);
   if (!token) {
     await prisma.featureRun.update({
       where: { id: runId },
-      data: { status: "failed", errorMessage: "No GitHub token in session memory. Sign in again and restart the run." },
+      data: {
+        status: "failed",
+        errorMessage: "No GitHub token. Sign in again and restart the run.",
+      },
     });
     return;
   }
+  setUserToken(run.userId, token);
 
   try {
     const llmKeys = await getUserLlmKeys(run.userId);
 
-    // Phase 1–2: scan
     await prisma.featureRun.update({ where: { id: runId }, data: { status: "scanning" } });
     const scan = await scanRepository(token, run.repoFullName, run.goal);
     const branchName = run.branchName || `devcommand/${runId.slice(0, 8)}`;
@@ -79,7 +85,6 @@ export async function processRun(runId: string) {
       data: { scanJson: scan as any, branchName, status: "planning" },
     });
 
-    // Phase 3: plan + prompts
     const existing = await prisma.subTask.count({ where: { featureRunId: runId } });
     if (!existing) {
       const plan = await createFeaturePlan(run.goal, scan, llmKeys);
@@ -93,13 +98,19 @@ export async function processRun(runId: string) {
           generatedPrompt: step.generatedPrompt,
           criteria: step.criteria,
           dependsOn: step.dependsOnOrders,
-          status: i === 0 ? "ready" : "queued",
+          status: "queued",
         })),
+      });
+      await writeAudit({
+        userId: run.userId,
+        featureRunId: runId,
+        action: "run.planned",
+        detail: `${plan.length} sub-tasks`,
       });
     }
 
     await prisma.featureRun.update({ where: { id: runId }, data: { status: "running" } });
-    await drainSubTasks(runId, token, scan, llmKeys);
+    await scheduleReadySubTasks(runId);
   } catch (e: any) {
     await prisma.featureRun.update({
       where: { id: runId },
@@ -108,176 +119,73 @@ export async function processRun(runId: string) {
   }
 }
 
-async function drainSubTasks(
-  runId: string,
-  token: string,
-  scan: RepoScan,
-  llmKeys?: { openaiApiKey?: string | null; anthropicApiKey?: string | null }
-) {
-  const run = await prisma.featureRun.findUnique({ where: { id: runId } });
-  if (!run) return;
-  const keys = llmKeys || (await getUserLlmKeys(run.userId));
+/**
+ * Dependency-aware scheduler: unlock ready tasks and enqueue independent ones in parallel.
+ */
+export async function scheduleReadySubTasks(runId: string) {
+  const fresh = await prisma.featureRun.findUnique({
+    where: { id: runId },
+    include: { subTasks: { orderBy: { orderIndex: "asc" } } },
+  });
+  if (!fresh) return;
+  if (["awaiting_approval", "deploying", "done", "failed"].includes(fresh.status)) return;
 
-  for (let guard = 0; guard < 40; guard++) {
-    const fresh = await prisma.featureRun.findUnique({
-      where: { id: runId },
-      include: { subTasks: { orderBy: { orderIndex: "asc" } } },
-    });
-    if (!fresh) return;
-    if (["awaiting_approval", "deploying", "done", "failed"].includes(fresh.status)) return;
+  const token = await resolveToken(fresh.userId);
+  if (!token) return;
+  const scan = (fresh.scanJson as unknown as RepoScan) || null;
 
-    // Unlock ready tasks whose deps are done
-    for (const st of fresh.subTasks) {
-      if (st.status !== "queued") continue;
-      const deps = (st.dependsOn as number[]) || [];
-      const ok = deps.every(
-        (idx: number) =>
-          fresh.subTasks.find((x: { orderIndex: number; status: string }) => x.orderIndex === idx)?.status === "done"
-      );
-      if (ok) {
-        await prisma.subTask.update({ where: { id: st.id }, data: { status: "ready" } });
-      }
+  // Unlock deps
+  for (const st of fresh.subTasks) {
+    if (st.status !== "queued") continue;
+    const deps = (st.dependsOn as number[]) || [];
+    const ok = deps.every(
+      (idx: number) =>
+        fresh.subTasks.find((x) => x.orderIndex === idx)?.status === "done"
+    );
+    if (ok) {
+      await prisma.subTask.update({ where: { id: st.id }, data: { status: "ready" } });
+      st.status = "ready";
     }
+  }
 
-    const current = await prisma.subTask.findFirst({
-      where: { featureRunId: runId, status: { in: ["ready", "needs_followup"] } },
-      orderBy: { orderIndex: "asc" },
-    });
+  const runningCount = fresh.subTasks.filter((s) => s.status === "running").length;
+  const maxParallel = Math.max(1, Number(process.env.MAX_PARALLEL_SUBTASKS || 3));
+  const slots = Math.max(0, maxParallel - runningCount);
 
-    if (!current) {
-      const remaining = await prisma.subTask.count({
-        where: { featureRunId: runId, status: { notIn: ["done", "skipped"] } },
-      });
-      if (remaining === 0) {
-        await finishWithPr(runId, token, scan);
-      }
-      return;
-    }
+  const ready = fresh.subTasks.filter((s) => s.status === "ready" || s.status === "needs_followup");
 
-    if (current.agent === "human") {
-      // Review happens only after a real PR exists. Do not expose approval
-      // actions for an empty branch or before a PR is created.
-      await finishWithPr(runId, token, scan);
-      return;
-    }
+  // Human gate: if a human task is ready and no coding tasks remain ready/running, open PR
+  const humanReady = ready.find((s) => s.agent === "human");
+  const codingReady = ready.filter((s) => s.agent !== "human");
+  if (humanReady && !codingReady.length && runningCount === 0) {
+    if (scan) await finishWithPr(runId, token, scan);
+    return;
+  }
 
-    await prisma.subTask.update({
-      where: { id: current.id },
-      data: { status: "running", startedAt: new Date(), attempt: { increment: 1 } },
-    });
+  let enqueued = 0;
+  for (const st of codingReady) {
+    if (enqueued >= slots) break;
+    if (st.status === "running") continue;
 
-    const prompt =
-      current.status === "needs_followup" && current.followUpPrompt
-        ? current.followUpPrompt
-        : current.generatedPrompt;
-
-    const result = await runAgent({
-      agent: current.agent,
-      prompt,
-      repoFullName: fresh.repoFullName,
-      branchName: fresh.branchName || "devcommand/local",
-      title: current.title,
-      goal: fresh.goal,
-      token,
-      attempt: current.attempt + 1,
-      relevantFiles: Array.isArray(scan.relevantFiles) ? scan.relevantFiles : [],
-      openaiApiKey: keys.openaiApiKey,
-      anthropicApiKey: keys.anthropicApiKey,
-    });
-
-    if (result.needsHuman) {
-      await prisma.subTask.update({
-        where: { id: current.id },
-        data: {
-          status: "needs_followup",
-          logs: appendLog(current.logs, result.logs),
-          resultJson: (result.result || {}) as object,
-        },
-      });
-      await prisma.featureRun.update({ where: { id: runId }, data: { status: "awaiting_approval" } });
-      return;
-    }
-
-    if (!result.available) {
-      // An unconnected agent has not executed or committed any code.
-      await prisma.subTask.update({
-        where: { id: current.id },
-        data: {
-          status: "needs_followup",
-          logs: appendLog(current.logs, result.logs + "\nRun the prompt with a real agent and push the feature branch."),
-          resultJson: { ...(result.result || {}), manualPromptReady: true } as object,
-        },
-      });
-      await prisma.featureRun.update({
-        where: { id: runId },
-        data: {
-          status: "awaiting_approval",
-          errorMessage: "Agent not connected: manual execution required. No code was committed. Connect an agent or run the prompt, then push changes before approval.",
-        },
-      });
-      return;
-    }
-
-    if (result.success) {
-      await prisma.subTask.update({
-        where: { id: current.id },
-        data: {
-          status: "done",
-          completedAt: new Date(),
-          logs: appendLog(current.logs, result.logs),
-          resultJson: (result.result || { summary: result.summary }) as object,
-        },
-      });
-
-      // Testing phase marker
-      if (/test/i.test(current.title)) {
-        await prisma.featureRun.update({
-          where: { id: runId },
-          data: {
-            status: "testing",
-            testSummary: result.summary || result.logs.slice(0, 1000),
-          },
-        });
-      } else {
-        await prisma.featureRun.update({ where: { id: runId }, data: { status: "running" } });
-      }
-      continue;
-    }
-
-    // Failure / follow-up
-    const attempt = current.attempt + 1;
-    if (attempt >= current.maxAttempts) {
-      await prisma.subTask.update({
-        where: { id: current.id },
-        data: {
-          status: "failed",
-          logs: appendLog(current.logs, result.logs),
-          resultJson: (result.result || {}) as object,
-        },
-      });
-      await prisma.featureRun.update({
-        where: { id: runId },
-        data: {
-          status: "failed",
-          errorMessage: result.followUpReason || `Sub-task failed: ${current.title}`,
-        },
-      });
-      return;
-    }
-
-    const follow = buildFollowUpPrompt(
-      current.generatedPrompt,
-      result.logs,
-      result.followUpReason || "Agent reported failure"
+    const jobId = await enqueueSubTask(
+      { subTaskId: st.id, featureRunId: runId, userId: fresh.userId },
+      { singletonKey: st.id }
     );
     await prisma.subTask.update({
-      where: { id: current.id },
+      where: { id: st.id },
       data: {
-        status: "needs_followup",
-        followUpPrompt: follow,
-        logs: appendLog(current.logs, result.logs),
+        status: "ready",
+        jobId: jobId || st.jobId,
       },
     });
+    enqueued++;
+  }
+
+  if (!enqueued && runningCount === 0) {
+    const remaining = fresh.subTasks.filter((s) => !["done", "skipped"].includes(s.status));
+    if (!remaining.length && scan) {
+      await finishWithPr(runId, token, scan);
+    }
   }
 }
 
@@ -296,7 +204,12 @@ async function finishWithPr(runId: string, token: string, scan: RepoScan) {
         status: "failed",
         prUrl: null,
         prNumber: null,
-        errorMessage: "No code changes between " + scan.defaultBranch + " and " + run.branchName + ". Connect an agent or push your actual commits before retrying. No PR was attempted.",
+        errorMessage:
+          "No code changes between " +
+          scan.defaultBranch +
+          " and " +
+          run.branchName +
+          ". Connect a real coding agent or push commits before retrying. No PR was attempted.",
       },
     });
     return;
@@ -312,7 +225,7 @@ async function finishWithPr(runId: string, token: string, scan: RepoScan) {
         body: buildPrBody(
           run.goal,
           scan,
-          run.subTasks.map((s: { title: string; agent: string; status: string }) => ({
+          run.subTasks.map((s) => ({
             title: s.title,
             agent: s.agent,
             status: s.status,
@@ -330,9 +243,14 @@ async function finishWithPr(runId: string, token: string, scan: RepoScan) {
           deployUrl: resolveDeployUrl(run.repoFullName, scan),
         },
       });
+      await writeAudit({
+        userId: run.userId,
+        featureRunId: runId,
+        action: "pr.opened",
+        detail: pr.prUrl,
+      });
       return;
     } catch (e: any) {
-      // GitHub failure must not become a misleading approval-ready state
       await prisma.featureRun.update({
         where: { id: runId },
         data: {
@@ -358,20 +276,43 @@ export async function approveRun(runId: string, approver: string, merge: boolean
     throw Object.assign(new Error("Run is not awaiting approval"), { status: 400 });
   }
 
-  const token = getToken(run.userId);
-  if (!token) throw Object.assign(new Error("GitHub session expired. Sign in again before approval."), { status: 401 });
+  const token = await resolveToken(run.userId);
+  if (!token)
+    throw Object.assign(new Error("GitHub session expired. Sign in again before approval."), {
+      status: 401,
+    });
   if (!run.branchName || !run.prNumber || !run.prUrl) {
-    throw Object.assign(new Error("No PR exists. Push real code changes before approving."), { status: 409 });
+    throw Object.assign(new Error("No PR exists. Push real code changes before approving."), {
+      status: 409,
+    });
   }
   const base = ((run.scanJson as unknown as RepoScan | null)?.defaultBranch) || "main";
   const diff = await checkBranchDiff(token, run.repoFullName, base, run.branchName);
   if (!hasReviewableChanges(diff)) {
-    throw Object.assign(new Error("Feature branch has no code changes. Approval blocked."), { status: 409 });
+    throw Object.assign(new Error("Feature branch has no code changes. Approval blocked."), {
+      status: 409,
+    });
   }
 
-  // Complete any human subtasks
+  // Never auto-merge when CI is red
+  if (merge) {
+    const ci = await getPrCiStatus(token, run.repoFullName, run.branchName);
+    if (ci.state === "failure" || ci.state === "error") {
+      throw Object.assign(new Error(`Merge blocked: ${ci.summary}`), { status: 409 });
+    }
+    if (ci.state === "pending" && process.env.ALLOW_MERGE_PENDING_CI !== "1") {
+      throw Object.assign(new Error(`Merge blocked while CI is pending: ${ci.summary}`), {
+        status: 409,
+      });
+    }
+  }
+
   await prisma.subTask.updateMany({
-    where: { featureRunId: runId, agent: "human", status: { in: ["needs_followup", "ready", "queued", "running"] } },
+    where: {
+      featureRunId: runId,
+      agent: "human",
+      status: { in: ["needs_followup", "ready", "queued", "running"] },
+    },
     data: { status: "done", completedAt: new Date(), logs: "Approved by " + approver },
   });
 
@@ -384,8 +325,14 @@ export async function approveRun(runId: string, approver: string, merge: boolean
       errorMessage: null,
     },
   });
+  await writeAudit({
+    userId: run.userId,
+    featureRunId: runId,
+    action: merge ? "run.approve_merge" : "run.approve",
+    detail: approver,
+  });
 
-  if (merge && token && run.prNumber) {
+  if (merge && run.prNumber) {
     try {
       await mergePullRequest({ token, fullName: run.repoFullName, prNumber: run.prNumber });
     } catch (e: any) {
@@ -400,42 +347,30 @@ export async function approveRun(runId: string, approver: string, merge: boolean
     }
   }
 
-  // Remaining non-human tasks after approval (e.g. deploy prep)
   const pending = await prisma.subTask.findMany({
     where: { featureRunId: runId, status: { in: ["queued", "ready", "needs_followup"] } },
     orderBy: { orderIndex: "asc" },
   });
 
-  if (pending.length && token) {
-    const scan = (run.scanJson as unknown as RepoScan) || {
-      fullName: run.repoFullName,
-      defaultBranch: "main",
-      description: null,
-      language: null,
-      stack: [],
-      packageManager: null,
-      testCommand: null,
-      buildCommand: null,
-      hasCi: false,
-      frameworks: [],
-      topFiles: [],
-      relevantFiles: [],
-      readmeExcerpt: null,
-      summary: "",
-    };
+  if (pending.length) {
     await prisma.featureRun.update({ where: { id: runId }, data: { status: "running" } });
-    await drainSubTasks(runId, token, scan, await getUserLlmKeys(run.userId));
+    await scheduleReadySubTasks(runId);
   }
 
-  const after = await prisma.featureRun.findUnique({ where: { id: runId }, include: { subTasks: true } });
-  if (after && !["failed", "awaiting_approval"].includes(after.status)) {
-    const left = after.subTasks.filter((s: { status: string }) => !["done", "skipped"].includes(s.status));
+  const after = await prisma.featureRun.findUnique({
+    where: { id: runId },
+    include: { subTasks: true },
+  });
+  if (after && !["failed", "awaiting_approval", "running"].includes(after.status)) {
+    const left = after.subTasks.filter((s) => !["done", "skipped"].includes(s.status));
     if (!left.length) {
       await prisma.featureRun.update({
         where: { id: runId },
         data: {
           status: "done",
-          deployUrl: after.deployUrl || resolveDeployUrl(after.repoFullName, (after.scanJson as any) || { hasCi: false, topFiles: [] }),
+          deployUrl:
+            after.deployUrl ||
+            resolveDeployUrl(after.repoFullName, (after.scanJson as any) || { hasCi: false, topFiles: [] }),
         },
       });
     }
@@ -450,6 +385,7 @@ export async function approveRun(runId: string, approver: string, merge: boolean
 export async function retrySubTask(subTaskId: string) {
   const st = await prisma.subTask.findUnique({ where: { id: subTaskId } });
   if (!st) throw new Error("Sub-task not found");
+  const run = await prisma.featureRun.findUnique({ where: { id: st.featureRunId } });
   await prisma.subTask.update({
     where: { id: subTaskId },
     data: { status: "ready", followUpPrompt: null },
@@ -458,14 +394,10 @@ export async function retrySubTask(subTaskId: string) {
     where: { id: st.featureRunId },
     data: { status: "running", errorMessage: null },
   });
-  void processRun(st.featureRunId);
+  if (run) await enqueueSchedule({ featureRunId: st.featureRunId, userId: run.userId });
 }
 
-function appendLog(prev: string | null | undefined, next: string) {
-  return [prev, next].filter(Boolean).join("\n---\n");
-}
-
-/** Background tick for stuck ready tasks */
+/** Background tick — recovers stuck runs into the queue */
 export function startSupervisorLoop(intervalMs = 8000) {
   setInterval(async () => {
     if (ticking) return;
@@ -477,14 +409,12 @@ export function startSupervisorLoop(intervalMs = 8000) {
         orderBy: { updatedAt: "asc" },
       });
       for (const run of runs) {
-        if (!getToken(run.userId)) continue;
+        const token = await resolveToken(run.userId);
+        if (!token) continue;
+        setUserToken(run.userId, token);
         if (run.status === "queued") void processRun(run.id);
         else if (run.status === "running" || run.status === "testing") {
-          const scan = run.scanJson as unknown as RepoScan | null;
-          if (scan) {
-            const token = getToken(run.userId)!;
-            void drainSubTasks(run.id, token, scan);
-          }
+          await enqueueSchedule({ featureRunId: run.id, userId: run.userId });
         }
       }
     } catch {

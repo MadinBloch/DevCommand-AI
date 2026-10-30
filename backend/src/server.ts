@@ -9,7 +9,7 @@ import { z } from "zod";
 import { prisma } from "./db.js";
 import { gh } from "./github.js";
 import { createPlan } from "./services/planner.js";
-import { executionCapability, listAgents } from "./agents/registry.js";
+import { executionCapability, listAgentsDetailed } from "./agents/registry.js";
 import {
   approveRun,
   clearUserToken,
@@ -17,9 +17,14 @@ import {
   setUserToken,
   startFeatureRun,
   startSupervisorLoop,
+  scheduleReadySubTasks,
 } from "./services/supervisor.js";
-import { getUserLlmKeys } from "./services/userKeys.js";
+import { getUserLlmKeys, persistGithubToken } from "./services/userKeys.js";
 import { encryptSecret, looksLikeOpenAiKey, maskKey } from "./services/secrets.js";
+import { startWorkers } from "./services/worker.js";
+import { dockerWorkerEnabled } from "./services/workspace.js";
+import { getPrCiStatus } from "./services/ciStatus.js";
+import { writeAudit } from "./services/audit.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -97,35 +102,108 @@ app.get("/api/health", (_q, s) =>
     app: "DevCommand AI",
     agentMode: process.env.AGENT_MODE || "manual",
     canCommit: executionCapability().canCommit,
+    dockerWorker: dockerWorkerEnabled(),
+    queue: "pg-boss",
     phases: ["scan", "plan", "assign", "commit", "validate", "pr", "approve", "deploy"],
   })
 );
 
 app.get("/api/agents", async (req, res) => {
-  let userKeys: { openaiApiKey?: string | null; anthropicApiKey?: string | null } = {};
+  let userKeys: {
+    openaiApiKey?: string | null;
+    anthropicApiKey?: string | null;
+    geminiApiKey?: string | null;
+  } = {};
   if (req.session.githubUser) {
     userKeys = await getUserLlmKeys(String(req.session.githubUser.id));
   }
+  const agents = await listAgentsDetailed(userKeys);
   const cap = executionCapability(userKeys);
+  const anyCli = agents.some(
+    (a) => ["codex", "claude", "gemini", "antigravity"].includes(a.name) && a.connected
+  );
   res.json({
-    agents: listAgents(userKeys),
+    agents: agents.map((a) => ({
+      name: a.name,
+      displayName: a.displayName,
+      available: a.connected || a.available,
+      connected: a.connected,
+      enabled: a.enabled,
+      mode: a.mode,
+      reason: a.reason,
+      version: a.version,
+      requires: a.requires,
+      executionState: a.executionState,
+    })),
     mode: cap.mode,
-    llmPlanner: Boolean(userKeys.openaiApiKey || userKeys.anthropicApiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY),
+    llmPlanner: Boolean(
+      userKeys.openaiApiKey ||
+        userKeys.anthropicApiKey ||
+        process.env.OPENAI_API_KEY ||
+        process.env.ANTHROPIC_API_KEY
+    ),
     llmCoder: cap.llmCoder,
-    canCommit: cap.canCommit,
+    canCommit: cap.canCommit || anyCli,
     hasUserOpenAiKey: Boolean(userKeys.openaiApiKey),
+    dockerWorker: cap.dockerWorker,
   });
+});
+
+app.get("/api/overview", needAuth, async (req, res) => {
+  const userId = String(req.session.githubUser!.id);
+  const [runs, agents] = await Promise.all([
+    prisma.featureRun.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      include: { subTasks: { select: { status: true, agent: true } } },
+    }),
+    listAgentsDetailed(await getUserLlmKeys(userId)),
+  ]);
+  const active = runs.filter((r) =>
+    ["queued", "scanning", "planning", "running", "testing", "reviewing"].includes(r.status)
+  ).length;
+  const awaiting = runs.filter((r) => r.status === "awaiting_approval").length;
+  const failed = runs.filter((r) => r.status === "failed").length;
+  res.json({
+    stats: {
+      runs: runs.length,
+      active,
+      awaitingApproval: awaiting,
+      failed,
+      agentsConnected: agents.filter((a) => a.connected).length,
+    },
+    recentRuns: runs.slice(0, 8),
+    agents,
+  });
+});
+
+app.get("/api/activity", needAuth, async (req, res) => {
+  const userId = String(req.session.githubUser!.id);
+  const logs = await prisma.auditLog.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  res.json({ logs });
 });
 
 app.get("/api/settings", needAuth, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: String(req.session.githubUser!.id) } });
   const keys = await getUserLlmKeys(String(req.session.githubUser!.id));
+  const configs = await prisma.agentConfig.findMany({
+    where: { userId: String(req.session.githubUser!.id) },
+  });
   res.json({
     openaiApiKeyMasked: maskKey(keys.openaiApiKey),
     hasOpenAiKey: Boolean(keys.openaiApiKey),
     anthropicApiKeyMasked: maskKey(keys.anthropicApiKey),
     hasAnthropicKey: Boolean(keys.anthropicApiKey),
+    geminiApiKeyMasked: maskKey(keys.geminiApiKey),
+    hasGeminiKey: Boolean(keys.geminiApiKey),
     serverHasOpenAiKey: Boolean(process.env.OPENAI_API_KEY),
+    dockerWorker: dockerWorkerEnabled(),
+    agentConfigs: configs,
     login: user?.login || req.session.githubUser!.login,
   });
 });
@@ -133,8 +211,10 @@ app.get("/api/settings", needAuth, async (req, res) => {
 const settingsSchema = z.object({
   openaiApiKey: z.string().trim().max(200).optional().nullable(),
   anthropicApiKey: z.string().trim().max(200).optional().nullable(),
+  geminiApiKey: z.string().trim().max(200).optional().nullable(),
   clearOpenAiKey: z.boolean().optional(),
   clearAnthropicKey: z.boolean().optional(),
+  clearGeminiKey: z.boolean().optional(),
 });
 
 app.put("/api/settings", needAuth, async (req, res) => {
@@ -146,7 +226,11 @@ app.put("/api/settings", needAuth, async (req, res) => {
   const userId = String(req.session.githubUser!.id);
   await upsertUser(req.session.githubUser as any);
 
-  const data: { openaiApiKeyEnc?: string | null; anthropicApiKeyEnc?: string | null } = {};
+  const data: {
+    openaiApiKeyEnc?: string | null;
+    anthropicApiKeyEnc?: string | null;
+    geminiApiKeyEnc?: string | null;
+  } = {};
 
   if (p.data.clearOpenAiKey) data.openaiApiKeyEnc = null;
   else if (typeof p.data.openaiApiKey === "string" && p.data.openaiApiKey.length > 0) {
@@ -162,6 +246,11 @@ app.put("/api/settings", needAuth, async (req, res) => {
     data.anthropicApiKeyEnc = encryptSecret(p.data.anthropicApiKey.trim());
   }
 
+  if (p.data.clearGeminiKey) data.geminiApiKeyEnc = null;
+  else if (typeof p.data.geminiApiKey === "string" && p.data.geminiApiKey.length > 0) {
+    data.geminiApiKeyEnc = encryptSecret(p.data.geminiApiKey.trim());
+  }
+
   if (!Object.keys(data).length) {
     res.status(400).json({ error: "Nothing to update" });
     return;
@@ -175,7 +264,43 @@ app.put("/api/settings", needAuth, async (req, res) => {
     hasOpenAiKey: Boolean(keys.openaiApiKey),
     anthropicApiKeyMasked: maskKey(keys.anthropicApiKey),
     hasAnthropicKey: Boolean(keys.anthropicApiKey),
+    geminiApiKeyMasked: maskKey(keys.geminiApiKey),
+    hasGeminiKey: Boolean(keys.geminiApiKey),
   });
+});
+
+const agentConfigSchema = z.object({
+  provider: z.enum(["codex", "claude", "gemini", "antigravity", "llm", "testing"]),
+  enabled: z.boolean(),
+  mode: z.string().max(40).optional(),
+  configJson: z.record(z.unknown()).optional(),
+});
+
+app.put("/api/agents/:provider", needAuth, async (req, res) => {
+  const provider = req.params.provider;
+  const p = agentConfigSchema.safeParse({ ...req.body, provider });
+  if (!p.success) {
+    res.status(400).json({ error: "Invalid agent config", details: p.error.flatten() });
+    return;
+  }
+  const userId = String(req.session.githubUser!.id);
+  const row = await prisma.agentConfig.upsert({
+    where: { userId_provider: { userId, provider: p.data.provider } },
+    create: {
+      userId,
+      provider: p.data.provider,
+      enabled: p.data.enabled,
+      mode: p.data.mode || "auto",
+      configJson: (p.data.configJson || {}) as object,
+    },
+    update: {
+      enabled: p.data.enabled,
+      mode: p.data.mode || "auto",
+      configJson: (p.data.configJson || {}) as object,
+    },
+  });
+  await writeAudit({ userId, action: "agent.config", detail: `${provider} enabled=${p.data.enabled}` });
+  res.json({ config: row });
 });
 
 app.get("/api/auth/github", (req, res) => {
@@ -245,6 +370,8 @@ app.get("/api/auth/github/callback", async (req, res) => {
     req.session.githubAccessToken = td.access_token;
     req.session.githubUser = user;
     setUserToken(String(user.id), td.access_token);
+    await persistGithubToken(String(user.id), td.access_token).catch(() => undefined);
+    await writeAudit({ userId: String(user.id), action: "auth.login", detail: user.login });
     req.session.save((e) => {
       if (e) {
         res.status(500).send("Could not create session.");
@@ -373,11 +500,15 @@ app.post("/api/runs", needAuth, async (req, res) => {
     }
     await upsertUser(req.session.githubUser as any);
     const userKeys = await getUserLlmKeys(String(req.session.githubUser!.id));
+    const agents = await listAgentsDetailed(userKeys);
     const cap = executionCapability(userKeys);
-    if (!cap.canCommit) {
+    const anyCli = agents.some(
+      (a) => ["codex", "claude", "gemini", "antigravity", "llm"].includes(a.name) && a.connected
+    );
+    if (!cap.canCommit && !anyCli) {
       res.status(400).json({
         error:
-          "No coding engine connected. Add your OpenAI API key in Settings (or set OPENAI_API_KEY / an agent adapter on the server).",
+          "No coding engine connected. Install Codex/Claude/Gemini/Antigravity CLI on the worker, add an OpenAI key in Settings, or set AGENT_MODE=simulate for demo-only commits.",
       });
       return;
     }
@@ -500,8 +631,14 @@ app.post("/api/subtasks/:id/complete-manual", needAuth, async (req, res) => {
         .join("\n"),
     },
   });
+  await writeAudit({
+    userId: String(req.session.githubUser!.id),
+    featureRunId: st.featureRunId,
+    action: "subtask.manual_complete",
+    detail: st.title,
+  });
   if (!(st.featureRun.status === "awaiting_approval" && st.agent === "human")) {
-    await startFeatureRun(st.featureRunId);
+    await scheduleReadySubTasks(st.featureRunId);
   }
   const run = await prisma.featureRun.findUnique({
     where: { id: st.featureRunId },
@@ -510,9 +647,28 @@ app.post("/api/subtasks/:id/complete-manual", needAuth, async (req, res) => {
   res.json({ run });
 });
 
+app.get("/api/runs/:id/ci", needAuth, async (req, res) => {
+  const run = await prisma.featureRun.findFirst({
+    where: { id: req.params.id, userId: String(req.session.githubUser!.id) },
+  });
+  if (!run?.branchName) {
+    res.status(404).json({ error: "Run or branch not found" });
+    return;
+  }
+  const token = req.session.githubAccessToken!;
+  const ci = await getPrCiStatus(token, run.repoFullName, run.branchName);
+  res.json({ ci, prUrl: run.prUrl, branchName: run.branchName });
+});
+
 startSupervisorLoop(Number(process.env.SUPERVISOR_INTERVAL_MS || 8000));
 
-app.listen(port, "0.0.0.0", () => {
+app.listen(port, "0.0.0.0", async () => {
   console.log(`DevCommand API listening on ${port}`);
   console.log(`Agent mode: ${process.env.AGENT_MODE || "manual"}`);
+  console.log(`Docker worker: ${dockerWorkerEnabled() ? "enabled" : "worktree (default)"}`);
+  try {
+    await startWorkers();
+  } catch (e: any) {
+    console.error("[worker] failed to start pg-boss:", e?.message || e);
+  }
 });

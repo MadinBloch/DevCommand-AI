@@ -8,18 +8,22 @@ datasource db {
 }
 
 model User {
-  id               String       @id
-  githubId         Int          @unique
-  login            String
-  name             String?
-  avatarUrl        String?
-  email            String?
-  openaiApiKeyEnc  String?      @db.Text
-  anthropicApiKeyEnc String?    @db.Text
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-  featureRuns      FeatureRun[]
-  tasks            Task[]
+  id                   String        @id
+  githubId             Int           @unique
+  login                String
+  name                 String?
+  avatarUrl            String?
+  email                String?
+  openaiApiKeyEnc      String?       @db.Text
+  anthropicApiKeyEnc   String?       @db.Text
+  geminiApiKeyEnc      String?       @db.Text
+  githubTokenEnc       String?       @db.Text
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  featureRuns          FeatureRun[]
+  tasks                Task[]
+  agentConfigs         AgentConfig[]
+  auditLogs            AuditLog[]
 }
 
 model Task {
@@ -54,12 +58,14 @@ model FeatureRun {
   prNumber      Int?
   deployUrl     String?
   testSummary   String?   @db.Text
+  verifyReport  Json?
   errorMessage  String?   @db.Text
   approvedAt    DateTime?
   approvedBy    String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   subTasks      SubTask[]
+  auditLogs     AuditLog[]
 
   @@index([userId, createdAt])
   @@index([status])
@@ -83,6 +89,8 @@ model SubTask {
   logs            String?    @db.Text
   followUpPrompt  String?    @db.Text
   resultJson      Json?
+  workspacePath   String?
+  jobId           String?
   startedAt       DateTime?
   completedAt     DateTime?
   createdAt       DateTime   @default(now())
@@ -90,4 +98,39 @@ model SubTask {
 
   @@index([featureRunId, orderIndex])
   @@index([status])
+  @@index([jobId])
+}
+
+model AgentConfig {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider    String
+  enabled     Boolean  @default(true)
+  mode        String   @default("auto")
+  configJson  Json     @default("{}")
+  lastStatus  String   @default("unknown")
+  lastChecked DateTime?
+  lastError   String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model AuditLog {
+  id           String      @id @default(cuid())
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  featureRunId String?
+  featureRun   FeatureRun? @relation(fields: [featureRunId], references: [id], onDelete: SetNull)
+  action       String
+  detail       String?     @db.Text
+  metaJson     Json?
+  createdAt    DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([featureRunId, createdAt])
+  @@index([action, createdAt])
 }

@@ -9,9 +9,16 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
   const [hasOpenAiKey, setHasOpenAiKey] = useState(false);
-  const [masked, setMasked] = useState<string | null>(null);
+  const [hasAnthropicKey, setHasAnthropicKey] = useState(false);
+  const [hasGeminiKey, setHasGeminiKey] = useState(false);
+  const [maskedOpenAi, setMaskedOpenAi] = useState<string | null>(null);
+  const [maskedAnthropic, setMaskedAnthropic] = useState<string | null>(null);
+  const [maskedGemini, setMaskedGemini] = useState<string | null>(null);
   const [serverHas, setServerHas] = useState(false);
+  const [dockerWorker, setDockerWorker] = useState(false);
   const [openaiKey, setOpenaiKey] = useState("");
+  const [anthropicKey, setAnthropicKey] = useState("");
+  const [geminiKey, setGeminiKey] = useState("");
   const [show, setShow] = useState(false);
 
   async function load() {
@@ -20,8 +27,13 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
     try {
       const s = await api.settings();
       setHasOpenAiKey(s.hasOpenAiKey);
-      setMasked(s.openaiApiKeyMasked);
+      setHasAnthropicKey(s.hasAnthropicKey);
+      setHasGeminiKey(s.hasGeminiKey);
+      setMaskedOpenAi(s.openaiApiKeyMasked);
+      setMaskedAnthropic(s.anthropicApiKeyMasked);
+      setMaskedGemini(s.geminiApiKeyMasked);
       setServerHas(s.serverHasOpenAiKey);
+      setDockerWorker(Boolean(s.dockerWorker));
     } catch (e: any) {
       setError(e.message || "Could not load settings");
     } finally {
@@ -39,11 +51,25 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
     setError("");
     setOk("");
     try {
-      const r = await api.saveSettings({ openaiApiKey: openaiKey.trim() });
+      const body: Record<string, string> = {};
+      if (openaiKey.trim()) body.openaiApiKey = openaiKey.trim();
+      if (anthropicKey.trim()) body.anthropicApiKey = anthropicKey.trim();
+      if (geminiKey.trim()) body.geminiApiKey = geminiKey.trim();
+      if (!Object.keys(body).length) {
+        setError("Enter at least one key to save");
+        return;
+      }
+      const r = await api.saveSettings(body);
       setHasOpenAiKey(r.hasOpenAiKey);
-      setMasked(r.openaiApiKeyMasked);
+      setHasAnthropicKey(r.hasAnthropicKey);
+      setHasGeminiKey(r.hasGeminiKey);
+      setMaskedOpenAi(r.openaiApiKeyMasked);
+      setMaskedAnthropic(r.anthropicApiKeyMasked);
+      setMaskedGemini(r.geminiApiKeyMasked);
       setOpenaiKey("");
-      setOk("OpenAI key saved. It will be used for planning and coding commits.");
+      setAnthropicKey("");
+      setGeminiKey("");
+      setOk("Keys saved (encrypted). CLI agents still require their binaries on the worker.");
       onSaved?.();
     } catch (err: any) {
       setError(err.message || "Save failed");
@@ -52,15 +78,25 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
     }
   }
 
-  async function clearKey() {
+  async function clearKey(which: "openai" | "anthropic" | "gemini") {
     setSaving(true);
     setError("");
     setOk("");
     try {
-      const r = await api.saveSettings({ clearOpenAiKey: true });
+      const r = await api.saveSettings(
+        which === "openai"
+          ? { clearOpenAiKey: true }
+          : which === "anthropic"
+            ? { clearAnthropicKey: true }
+            : { clearGeminiKey: true }
+      );
       setHasOpenAiKey(r.hasOpenAiKey);
-      setMasked(r.openaiApiKeyMasked);
-      setOk("OpenAI key removed from your account.");
+      setHasAnthropicKey(r.hasAnthropicKey);
+      setHasGeminiKey(r.hasGeminiKey);
+      setMaskedOpenAi(r.openaiApiKeyMasked);
+      setMaskedAnthropic(r.anthropicApiKeyMasked);
+      setMaskedGemini(r.geminiApiKeyMasked);
+      setOk("Key removed.");
       onSaved?.();
     } catch (err: any) {
       setError(err.message || "Could not clear key");
@@ -82,31 +118,39 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
       <section className="surface">
         <p className="eyebrow">
           <KeyRound size={12} style={{ display: "inline", verticalAlign: -1, marginRight: 6 }} />
-          API keys
+          Provider credentials
         </p>
-        <h3>OpenAI key</h3>
+        <h3>API keys &amp; worker settings</h3>
         <p className="hint">
-          Stored encrypted on the server for your GitHub account only. Never shown in full again after save. Used for
-          smarter plans and the built-in LLM coder that commits to your feature branch.
+          Keys are encrypted at rest. They do not automatically connect coding CLIs — install{" "}
+          <code>codex</code>, <code>claude</code>, <code>gemini</code>, or <code>agy</code> on the worker host.
+          Isolation: <b>{dockerWorker ? "Docker containers" : "git worktrees (default)"}</b>
+          {dockerWorker ? "" : " — set DOCKER_WORKER=1 for containers"}.
         </p>
 
-        {hasOpenAiKey ? (
-          <div className="banner ok" style={{ marginTop: 14 }}>
-            <CheckCircle2 size={15} style={{ verticalAlign: -2, marginRight: 6 }} />
-            Key on file: <b>{masked}</b>
+        <div className="key-status-grid">
+          <div className={`banner ${hasOpenAiKey ? "ok" : "mute"}`}>
+            OpenAI {hasOpenAiKey ? <b>{maskedOpenAi}</b> : "not set"}
+            {serverHas && !hasOpenAiKey ? " (server env fallback)" : ""}
           </div>
-        ) : (
-          <div className="banner mute" style={{ marginTop: 14 }}>
-            No personal OpenAI key yet.
-            {serverHas ? " Server env key may still be used as fallback." : " Add a key to enable LLM coding."}
+          <div className={`banner ${hasAnthropicKey ? "ok" : "mute"}`}>
+            Anthropic {hasAnthropicKey ? <b>{maskedAnthropic}</b> : "not set"}
+          </div>
+          <div className={`banner ${hasGeminiKey ? "ok" : "mute"}`}>
+            Gemini {hasGeminiKey ? <b>{maskedGemini}</b> : "not set"}
+          </div>
+        </div>
+
+        {error && <div className="banner bad">{error}</div>}
+        {ok && (
+          <div className="banner ok">
+            <CheckCircle2 size={15} style={{ verticalAlign: -2, marginRight: 6 }} />
+            {ok}
           </div>
         )}
 
-        {error && <div className="banner bad">{error}</div>}
-        {ok && <div className="banner ok">{ok}</div>}
-
         <form className="form" onSubmit={save} style={{ marginTop: 8 }}>
-          <label htmlFor="openai-key">New OpenAI API key</label>
+          <label htmlFor="openai-key">OpenAI API key</label>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <Input
               id="openai-key"
@@ -115,24 +159,52 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
               placeholder="sk-…"
               value={openaiKey}
               onChange={(e) => setOpenaiKey(e.target.value)}
-              minLength={20}
-              required
             />
             <Button type="button" variant="outline" size="icon" aria-label={show ? "Hide" : "Show"} onClick={() => setShow((v) => !v)}>
               {show ? <EyeOff size={16} /> : <Eye size={16} />}
             </Button>
-          </div>
-          <p className="hint">Create a key at platform.openai.com — never commit it to git.</p>
-          <div className="row" style={{ marginTop: 12 }}>
-            <Button type="submit" disabled={saving || openaiKey.trim().length < 20}>
-              {saving ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
-              Save key
-            </Button>
             {hasOpenAiKey && (
-              <Button type="button" variant="outline" disabled={saving} onClick={clearKey}>
-                <Trash2 size={16} /> Remove key
+              <Button type="button" variant="outline" disabled={saving} onClick={() => clearKey("openai")}>
+                <Trash2 size={16} />
               </Button>
             )}
+          </div>
+
+          <label htmlFor="anthropic-key">Anthropic API key</label>
+          <Input
+            id="anthropic-key"
+            type={show ? "text" : "password"}
+            autoComplete="off"
+            placeholder="sk-ant-…"
+            value={anthropicKey}
+            onChange={(e) => setAnthropicKey(e.target.value)}
+          />
+          {hasAnthropicKey && (
+            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => clearKey("anthropic")}>
+              <Trash2 size={16} /> Remove Anthropic key
+            </Button>
+          )}
+
+          <label htmlFor="gemini-key">Gemini API key</label>
+          <Input
+            id="gemini-key"
+            type={show ? "text" : "password"}
+            autoComplete="off"
+            placeholder="AIza…"
+            value={geminiKey}
+            onChange={(e) => setGeminiKey(e.target.value)}
+          />
+          {hasGeminiKey && (
+            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => clearKey("gemini")}>
+              <Trash2 size={16} /> Remove Gemini key
+            </Button>
+          )}
+
+          <div className="row" style={{ marginTop: 12 }}>
+            <Button type="submit" disabled={saving}>
+              {saving ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />}
+              Save keys
+            </Button>
           </div>
         </form>
       </section>
@@ -141,9 +213,9 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
         <p className="eyebrow">Privacy</p>
         <h3>How keys are handled</h3>
         <ul className="connection-steps">
-          <li>Encrypted at rest with the server session secret (AES-256-GCM).</li>
-          <li>Only your user record stores the ciphertext — other accounts cannot read it.</li>
-          <li>API responses return a masked preview only (never the full key).</li>
+          <li>Encrypted at rest (AES-256-GCM) with SESSION_SECRET or SECRETS_KEY.</li>
+          <li>GitHub OAuth tokens are encrypted for worker recovery and never sent to agent CLIs.</li>
+          <li>API responses return masked previews only.</li>
         </ul>
       </section>
     </div>
