@@ -64,11 +64,11 @@ async function statusCodex(): Promise<ProviderStatus> {
     return {
       provider: "codex",
       displayName: "OpenAI Codex",
-      connected: true,
-      mode: "cli",
+      connected: false,
+      mode: "unavailable",
       binary: "codex",
       version: probe.version,
-      reason: "Codex CLI detected. Ensure CLI auth or OPENAI_API_KEY is configured on the worker.",
+      reason: "Codex CLI installed, but authentication has not been confirmed. Configure credentials and run an authenticated smoke test.",
       requires: ["codex CLI", "auth"],
     };
   }
@@ -220,17 +220,17 @@ async function runInWorkspace(
     const diff = await collectWorkspaceDiff(handle.worktreeDir);
     logs.push(`[diff] dirty=${diff.dirty} files=${diff.changedFiles.length}`);
 
-    if (!diff.dirty && !invoked.ok) {
+    if (!invoked.ok) {
       return {
         success: false,
         available: true,
         logs: redactSecrets(logs.join("\n")),
-        followUpReason: "Agent finished without file changes",
+        followUpReason: "Agent command failed; modifications were not committed",
         result: { provider, workspace: handle.worktreeDir },
       };
     }
 
-    if (diff.dirty || invoked.ok) {
+    if (diff.dirty && invoked.ok) {
       const pushed = await commitAndPushWorkspace({
         token: input.token,
         fullName: input.repoFullName,
@@ -240,12 +240,12 @@ async function runInWorkspace(
         message: `feat(devcommand): ${input.title} via ${provider}`,
       });
       logs.push(`[git] commit=${pushed.commitSha} pushed=${pushed.pushed}`);
-      if (!diff.dirty && !pushed.pushed) {
+      if (!pushed.pushed) {
         return {
           success: false,
           available: true,
           logs: redactSecrets(logs.join("\n")),
-          followUpReason: "No reviewable local changes after agent run",
+          followUpReason: "Git push or integration was not confirmed",
           result: { provider, commitSha: pushed.commitSha },
         };
       }
