@@ -24,6 +24,20 @@ export function AgentsView({
   const [busy, setBusy] = useState<string | null>(null);
   const [models, setModels] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState("");
+  const [loginStatuses, setLoginStatuses] = useState<Array<{ provider: string; installed: boolean; authenticated: boolean | null; message: string }>>([]);
+  const [checkingLogin, setCheckingLogin] = useState(false);
+
+  async function checkLogins() {
+    setCheckingLogin(true);
+    try {
+      const response = await api.accountLoginStatus();
+      setLoginStatuses(response.statuses);
+    } catch (e: any) {
+      setFeedback(e.message || "Login status lookup failed");
+    } finally {
+      setCheckingLogin(false);
+    }
+  }
   const modelOptions: Record<string, string[]> = {
     codex: ["default", "gpt-5-codex"],
     claude: ["default", "claude-sonnet-4-5"],
@@ -118,6 +132,31 @@ export function AgentsView({
         </p>
       </section>
 
+      <section className="surface" aria-label="Account login options">
+        <p className="eyebrow">Account authentication</p>
+        <h3>Connect using an account</h3>
+        <p className="hint">Supported account sign-in happens through the official CLI on the assigned worker. This page cannot access your ChatGPT, Claude or Google session directly. Never paste passwords or browser session tokens here.</p>
+        <Button variant="outline" disabled={checkingLogin} onClick={() => void checkLogins()}>
+          {checkingLogin ? "Checking…" : "Check worker login status"}
+        </Button>
+        <div className="agent-grid" style={{ marginTop: 12 }}>
+          {([
+            { provider: "codex", title: "ChatGPT / Codex", command: "codex login --device-auth", link: "https://learn.chatgpt.com/docs/auth", detail: "Device-code login is supported where enabled. Complete it for the worker identity." },
+            { provider: "claude", title: "Claude Code", command: "claude /login", link: "https://code.claude.com/docs/en/authentication", detail: "Use Claude Code's supported interactive login on the worker." },
+            { provider: "gemini", title: "Google / Gemini", command: "gemini", link: "https://geminicli.com/docs/get-started/authentication/", detail: "Select Sign in with Google in the CLI; remote/headless workers may require API credentials." },
+          ] as const).map((item) => {
+            const state = loginStatuses.find((s) => s.provider === item.provider);
+            return <div className="agent" key={item.provider}>
+              <b>{item.title}</b>
+              <span className={`pill ${state?.authenticated === true ? "ok" : "mute"}`}>{state?.authenticated === true ? "Worker signed in" : state?.authenticated === false ? "Not signed in" : "Not verified"}</span>
+              <p className="hint">{state?.message || item.detail}</p>
+              <p className="hint">Worker setup: <code>{item.command}</code></p>
+              <a href={item.link} target="_blank" rel="noopener noreferrer">Official login instructions</a>
+            </div>;
+          })}
+        </div>
+        <p className="hint">Login status is scoped to the backend worker host, not your GitHub user account. Personal account linking requires a per-user credential boundary and supported provider authorization.</p>
+      </section>
       {feedback && <div className="banner">{feedback}</div>}
       <div className="agent-grid">
         {agents.map((a) => {
