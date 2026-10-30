@@ -20,6 +20,21 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
   const [anthropicKey, setAnthropicKey] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
   const [show, setShow] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, string>>({});
+
+  async function testConnection(provider: "openai" | "anthropic" | "gemini") {
+    setTesting(provider);
+    setTestResults((prev) => ({ ...prev, [provider]: "Checking provider API…" }));
+    try {
+      const result = await api.testProviderConnection(provider);
+      setTestResults((prev) => ({ ...prev, [provider]: `${result.connected ? "Verified" : "Not verified"}: ${result.message}` }));
+    } catch (e: any) {
+      setTestResults((prev) => ({ ...prev, [provider]: `Error: ${e.message || "Request failed"}` }));
+    } finally {
+      setTesting(null);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -207,6 +222,28 @@ export function SettingsView({ onSaved }: { onSaved?: () => void }) {
             </Button>
           </div>
         </form>
+      </section>
+
+      <section className="surface" aria-label="Provider connection tests">
+        <p className="eyebrow">Connections</p>
+        <h3>Test your AI connections</h3>
+        <p className="hint">Save a key above, then validate it against the provider API. API verification does not verify a coding CLI or worker. Tests do not execute code.</p>
+        <div className="agent-grid">
+          {([
+            { id: "openai", title: "OpenAI", saved: hasOpenAiKey },
+            { id: "anthropic", title: "Anthropic", saved: hasAnthropicKey },
+            { id: "gemini", title: "Google Gemini", saved: hasGeminiKey },
+          ] as const).map((item) => (
+            <div className="agent" key={item.id}>
+              <b>{item.title}</b>
+              <span className={`pill ${item.saved ? "ok" : "mute"}`}>{item.saved ? "Key saved" : "No key"}</span>
+              <p className="hint">{testResults[item.id] || "Not tested this session"}</p>
+              <Button type="button" variant="outline" size="sm" disabled={!item.saved || testing !== null} onClick={() => void testConnection(item.id)}>
+                {testing === item.id ? <Loader2 className="spin" size={14} /> : <CheckCircle2 size={14} />} Test Connection
+              </Button>
+            </div>
+          ))}
+        </div>
       </section>
 
       <section className="surface">
