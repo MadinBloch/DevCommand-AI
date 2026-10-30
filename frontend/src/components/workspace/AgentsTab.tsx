@@ -138,7 +138,7 @@ export function AgentsView({
                 <div className="form" style={{ marginTop: 10 }}>
                   <label htmlFor={`model-${a.name}`}>Model preference</label>
                   <select id={`model-${a.name}`} className="ui-input"
-                    value={models[a.name] || "default"}
+                    value={models[a.name] ?? a.selectedModel ?? "default"}
                     onChange={(e) => setModels((prev) => ({ ...prev, [a.name]: e.target.value }))}>
                     {modelOptions[a.name].map((model) => <option key={model} value={model}>{model}</option>)}
                   </select>
