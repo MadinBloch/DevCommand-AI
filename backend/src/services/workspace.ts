@@ -250,8 +250,8 @@ export async function commitAndPushWorkspace(opts: {
   });
 
   if (mergeTry.code !== 0 && !String(mergeTry.stderr).includes("Already up to date")) {
-    // Conflict: leave task branch pushed for integration step
-    return { commitSha: sha, pushed: true };
+    // Conflict: preserve the task branch but never report feature integration as successful.
+    throw new Error(redactSecrets("Feature branch merge failed; task branch preserved for manual integration: " + mergeTry.stderr));
   }
 
   const featurePush = await runCli({
