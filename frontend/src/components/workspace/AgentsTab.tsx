@@ -26,6 +26,19 @@ export function AgentsView({
   const [feedback, setFeedback] = useState("");
   const [loginStatuses, setLoginStatuses] = useState<Array<{ provider: string; installed: boolean; authenticated: boolean | null; message: string }>>([]);
   const [checkingLogin, setCheckingLogin] = useState(false);
+  const [verifyingGemini, setVerifyingGemini] = useState(false);
+
+  async function verifyGemini() {
+    setVerifyingGemini(true);
+    try {
+      const result = await api.verifyGeminiCli();
+      setLoginStatuses((prev) => [...prev.filter((item) => item.provider !== "gemini"), { provider: "gemini", installed: true, authenticated: result.authenticated, message: result.message }]);
+    } catch (e: any) {
+      setFeedback(e.message || "Gemini verification failed");
+    } finally {
+      setVerifyingGemini(false);
+    }
+  }
 
   async function checkLogins() {
     setCheckingLogin(true);
@@ -151,6 +164,7 @@ export function AgentsView({
               <span className={`pill ${state?.authenticated === true ? "ok" : "mute"}`}>{state?.authenticated === true ? "Worker signed in" : state?.authenticated === false ? "Not signed in" : "Not verified"}</span>
               <p className="hint">{state?.message || item.detail}</p>
               <p className="hint">Worker setup: <code>{item.command}</code></p>
+              {item.provider === "gemini" && <Button type="button" variant="outline" size="sm" disabled={verifyingGemini} onClick={() => void verifyGemini()}>{verifyingGemini ? "Verifying…" : "Verify Gemini CLI (uses API quota)"}</Button>}
               <a href={item.link} target="_blank" rel="noopener noreferrer">Official login instructions</a>
             </div>;
           })}
