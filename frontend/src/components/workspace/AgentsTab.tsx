@@ -102,8 +102,8 @@ export function AgentsView({
             <div key={a.name} className={`agent ${live ? "ok" : "mute"}`}>
               <Bot size={22} color={live ? "var(--signal)" : "var(--faint)"} />
               <b>{a.displayName || a.name}</b>
-              <span className={`pill ${live ? "ok" : "mute"}`}>
-                {live ? "connected" : a.mode === "manual" ? "manual worker" : "not connected"}
+              <span className={`pill ${live ? "ok" : a.mode === "manual" ? "warn" : "mute"}`}>
+                {live ? "connected" : a.mode === "manual" ? "manual worker" : a.mode === "unavailable" ? "unavailable" : "not connected"}
               </span>
               {a.mode && <p className="hint">mode: {a.mode}{a.version ? ` · ${a.version}` : ""}</p>}
               {a.reason && <p>{a.reason}</p>}
