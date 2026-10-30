@@ -92,7 +92,7 @@ export async function runVerificationCommands(
     if (spec.name === "test" && !steps[steps.length - 1].ok) break;
   }
 
-  const ok = steps.length === 0 ? true : steps.every((s) => s.ok || s.name === "lint");
+  const ok = steps.length > 0 && steps.every((s) => s.ok);
   const failed = steps.filter((s) => !s.ok).map((s) => s.name);
   return {
     ok: failed.length === 0,
@@ -175,5 +175,5 @@ export async function integrateTaskBranches(opts: {
       message: "chore(devcommand): integrate agent changes",
     });
   }
-  return { conflicts: [], ok: true };
+  throw new Error("Integration verification is not implemented: refusing to report an unverified merge as successful.");
 }
