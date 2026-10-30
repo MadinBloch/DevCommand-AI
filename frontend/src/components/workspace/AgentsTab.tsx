@@ -26,6 +26,19 @@ export function AgentsView({
   const [feedback, setFeedback] = useState("");
   const [loginStatuses, setLoginStatuses] = useState<Array<{ provider: string; installed: boolean; authenticated: boolean | null; message: string }>>([]);
   const [checkingLogin, setCheckingLogin] = useState(false);
+  const [verifyingGemini, setVerifyingGemini] = useState(false);
+
+  async function verifyGemini() {
+    setVerifyingGemini(true);
+    try {
+      const result = await api.verifyGeminiCli();
+      setLoginStatuses((prev) => [...prev.filter((item) => item.provider !== "gemini"), { provider: "gemini", installed: true, authenticated: result.authenticated, message: result.message }]);
+    } catch (e: any) {
+      setFeedback(e.message || "Gemini verification failed");
+    } finally {
+      setVerifyingGemini(false);
+    }
+  }
 
   async function checkLogins() {
     setCheckingLogin(true);
@@ -142,7 +155,7 @@ export function AgentsView({
         <div className="agent-grid" style={{ marginTop: 12 }}>
           {([
             { provider: "codex", title: "ChatGPT / Codex", command: "codex login --device-auth", link: "https://learn.chatgpt.com/docs/auth", detail: "Device-code login is supported where enabled. Complete it for the worker identity." },
-            { provider: "claude", title: "Claude Code", command: "claude /login", link: "https://code.claude.com/docs/en/authentication", detail: "Use Claude Code's supported interactive login on the worker." },
+            { provider: "claude", title: "Claude Code", command: "claude auth login", link: "https://code.claude.com/docs/en/authentication", detail: "Use Claude Code's supported interactive login on the worker." },
             { provider: "gemini", title: "Google / Gemini", command: "gemini", link: "https://geminicli.com/docs/get-started/authentication/", detail: "Select Sign in with Google in the CLI; remote/headless workers may require API credentials." },
           ] as const).map((item) => {
             const state = loginStatuses.find((s) => s.provider === item.provider);
@@ -151,10 +164,12 @@ export function AgentsView({
               <span className={`pill ${state?.authenticated === true ? "ok" : "mute"}`}>{state?.authenticated === true ? "Worker signed in" : state?.authenticated === false ? "Not signed in" : "Not verified"}</span>
               <p className="hint">{state?.message || item.detail}</p>
               <p className="hint">Worker setup: <code>{item.command}</code></p>
+              {item.provider === "gemini" && <Button type="button" variant="outline" size="sm" disabled={verifyingGemini} onClick={() => void verifyGemini()}>{verifyingGemini ? "Verifying…" : "Verify Gemini CLI (uses API quota)"}</Button>}
               <a href={item.link} target="_blank" rel="noopener noreferrer">Official login instructions</a>
             </div>;
           })}
         </div>
+        <p className="hint">For a browser-only connection without a configured worker account, use Settings → API keys → Test Connection. Provider web login alone does not grant DevCommand coding-agent access.</p>
         <p className="hint">Login status is scoped to the backend worker host, not your GitHub user account. Personal account linking requires a per-user credential boundary and supported provider authorization.</p>
       </section>
       {feedback && <div className="banner">{feedback}</div>}

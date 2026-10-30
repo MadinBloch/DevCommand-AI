@@ -163,7 +163,19 @@ app.get("/api/agents/account-login-status", needAuth, async (_req, res) => {
   const statuses = await Promise.all(binaries.map(async ({ provider, binary }) => {
     const probe = await probeCli(binary);
     if (!probe.installed) return { provider, installed: false, authenticated: false, message: "CLI not installed on worker." };
-    if (provider !== "codex") return { provider, installed: true, authenticated: null, message: "Account login requires worker-side interactive setup. No authenticated status inferred from installation." };
+    if (provider === "claude") {
+      const result = await runCli({ command: "claude", args: ["auth", "status"], cwd: process.cwd(), timeoutMs: 10000 });
+      if (result.code !== 0 || result.timedOut) return { provider, installed: true, authenticated: false, message: "Claude Code CLI authentication not verified." };
+      try {
+        const status = JSON.parse(result.stdout) as { loggedIn?: boolean };
+        return { provider, installed: true, authenticated: status.loggedIn === true, message: status.loggedIn === true ? "Claude Code CLI reports authenticated worker account." : "Claude Code CLI is not signed in." };
+      } catch {
+        return { provider, installed: true, authenticated: null, message: "Claude CLI status returned an unrecognized response; cannot verify authentication." };
+      }
+    }
+    if (provider === "gemini") {
+      return { provider, installed: true, authenticated: null, message: "Gemini CLI is installed; browser login cannot be verified reliably by version check. Test a saved Gemini API key in Settings instead, or use an isolated CLI smoke test." };
+    }
     const result = await runCli({ command: "codex", args: ["login", "status"], cwd: process.cwd(), timeoutMs: 10000 });
     return { provider, installed: true, authenticated: result.code === 0 && !result.timedOut,
       message: result.code === 0 && !result.timedOut
@@ -171,6 +183,33 @@ app.get("/api/agents/account-login-status", needAuth, async (_req, res) => {
         : "Codex worker account not authenticated or login status could not be checked." };
   }));
   res.json({ statuses, scope: "worker-host", accountLoginInBrowser: false });
+});
+
+app.post("/api/agents/verify-gemini-cli", needAuth, async (_req, res) => {
+  const installed = await probeCli("gemini");
+  if (!installed.installed) return void res.status(200).json({ authenticated: false, message: "Gemini CLI is not installed on the worker." });
+  // User-initiated probe only: may consume provider quota. Never silently execute or claim success from --version.
+  const result = await runCli({
+    command: "gemini",
+    args: ["-p", "Respond with ONLY READY.", "--output-format", "json"],
+    cwd: process.cwd(),
+    timeoutMs: 45000,
+    env: { GEMINI_CLI_NO_RELAUNCH: "true" },
+  });
+  if (result.timedOut || result.code !== 0) {
+    return void res.json({ authenticated: false, message: "Gemini worker authentication or request failed. Check the worker's Google sign-in or API credentials." });
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as { response?: string; error?: unknown };
+    return void res.json({
+      authenticated: !parsed.error && typeof parsed.response === "string" && parsed.response.includes("READY"),
+      message: !parsed.error && typeof parsed.response === "string" && parsed.response.includes("READY")
+        ? "Gemini worker completed an authenticated request. Worker-host identity only."
+        : "Gemini returned an unexpected response; connection not verified.",
+    });
+  } catch {
+    return void res.json({ authenticated: false, message: "Gemini response could not be verified." });
+  }
 });
 
 app.get("/api/overview", needAuth, async (req, res) => {

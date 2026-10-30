@@ -25,6 +25,7 @@ export const api = {
   me: () => req<{ user: User | null }>("/api/auth/me"),
   logout: () => req("/api/auth/logout", { method: "POST" }),
   repos: () => req<Repo[]>("/api/github/repos"),
+  verifyGeminiCli: () => req<{ authenticated: boolean; message: string }>("/api/agents/verify-gemini-cli", { method: "POST" }),
   accountLoginStatus: () => req<{ statuses: Array<{ provider: string; installed: boolean; authenticated: boolean | null; message: string }>; scope: string; accountLoginInBrowser: boolean }>("/api/agents/account-login-status"),
   agents: () =>
     req<{
