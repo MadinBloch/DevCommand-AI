@@ -185,6 +185,33 @@ app.get("/api/agents/account-login-status", needAuth, async (_req, res) => {
   res.json({ statuses, scope: "worker-host", accountLoginInBrowser: false });
 });
 
+app.post("/api/agents/verify-gemini-cli", needAuth, async (_req, res) => {
+  const installed = await probeCli("gemini");
+  if (!installed.installed) return void res.status(200).json({ authenticated: false, message: "Gemini CLI is not installed on the worker." });
+  // User-initiated probe only: may consume provider quota. Never silently execute or claim success from --version.
+  const result = await runCli({
+    command: "gemini",
+    args: ["-p", "Respond with ONLY READY.", "--output-format", "json"],
+    cwd: process.cwd(),
+    timeoutMs: 45000,
+    env: { GEMINI_CLI_NO_RELAUNCH: "true" },
+  });
+  if (result.timedOut || result.code !== 0) {
+    return void res.json({ authenticated: false, message: "Gemini worker authentication or request failed. Check the worker's Google sign-in or API credentials." });
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as { response?: string; error?: unknown };
+    return void res.json({
+      authenticated: !parsed.error && typeof parsed.response === "string" && parsed.response.includes("READY"),
+      message: !parsed.error && typeof parsed.response === "string" && parsed.response.includes("READY")
+        ? "Gemini worker completed an authenticated request. Worker-host identity only."
+        : "Gemini returned an unexpected response; connection not verified.",
+    });
+  } catch {
+    return void res.json({ authenticated: false, message: "Gemini response could not be verified." });
+  }
+});
+
 app.get("/api/overview", needAuth, async (req, res) => {
   const userId = String(req.session.githubUser!.id);
   const [runs, agents] = await Promise.all([
