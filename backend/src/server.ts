@@ -118,6 +118,8 @@ app.get("/api/agents", async (req, res) => {
     userKeys = await getUserLlmKeys(String(req.session.githubUser.id));
   }
   const agents = await listAgentsDetailed(userKeys);
+  const configs = req.session.githubUser ? await prisma.agentConfig.findMany({ where: { userId: String(req.session.githubUser.id) } }) : [];
+  const configsByProvider = new Map(configs.map((config) => [config.provider, config]));
   const cap = executionCapability(userKeys);
   const anyCli = agents.some(
     (a) => ["codex", "claude", "gemini", "antigravity"].includes(a.name) && a.connected
@@ -128,7 +130,8 @@ app.get("/api/agents", async (req, res) => {
       displayName: a.displayName,
       available: a.connected || a.available,
       connected: a.connected,
-      enabled: a.enabled,
+      enabled: configsByProvider.get(a.name)?.enabled ?? a.enabled,
+      selectedModel: ((configsByProvider.get(a.name)?.configJson as Record<string, unknown> | null)?.model as string | undefined) || "default",
       mode: a.mode,
       reason: a.reason,
       version: a.version,
