@@ -80,8 +80,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
-  setAgentEnabled: (provider: string, enabled: boolean) =>
-    req(`/api/agents/${provider}`, { method: "PUT", body: JSON.stringify({ provider, enabled }) }),
+  testProviderConnection: (provider: "openai" | "anthropic" | "gemini") =>
+    req<{ connected: boolean; provider: string; message: string }>("/api/settings/test-connection", { method: "POST", body: JSON.stringify({ provider }) }),
+  setAgentEnabled: (provider: string, enabled: boolean, model?: string) =>
+    req(`/api/agents/${provider}`, { method: "PUT", body: JSON.stringify({ provider, enabled, ...(model ? { configJson: { model } } : {}) }) }),
   runs: () => req<FeatureRun[]>("/api/runs"),
   run: (id: string) => req<FeatureRunDetail>(`/api/runs/${id}`),
   runCi: (id: string) => req<{ ci: { state: string; summary: string }; prUrl: string | null }>(`/api/runs/${id}/ci`),
@@ -130,6 +132,7 @@ export type AgentInfo = {
   version?: string;
   requires?: string[];
   executionState?: string;
+  selectedModel?: string;
 };
 
 export type ActivityLog = {

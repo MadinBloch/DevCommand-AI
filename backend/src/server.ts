@@ -118,6 +118,8 @@ app.get("/api/agents", async (req, res) => {
     userKeys = await getUserLlmKeys(String(req.session.githubUser.id));
   }
   const agents = await listAgentsDetailed(userKeys);
+  const configs = req.session.githubUser ? await prisma.agentConfig.findMany({ where: { userId: String(req.session.githubUser.id) } }) : [];
+  const configsByProvider = new Map(configs.map((config) => [config.provider, config]));
   const cap = executionCapability(userKeys);
   const anyCli = agents.some(
     (a) => ["codex", "claude", "gemini", "antigravity"].includes(a.name) && a.connected
@@ -128,7 +130,8 @@ app.get("/api/agents", async (req, res) => {
       displayName: a.displayName,
       available: a.connected || a.available,
       connected: a.connected,
-      enabled: a.enabled,
+      enabled: configsByProvider.get(a.name)?.enabled ?? a.enabled,
+      selectedModel: ((configsByProvider.get(a.name)?.configJson as Record<string, unknown> | null)?.model as string | undefined) || "default",
       mode: a.mode,
       reason: a.reason,
       version: a.version,
@@ -267,6 +270,45 @@ app.put("/api/settings", needAuth, async (req, res) => {
     geminiApiKeyMasked: maskKey(keys.geminiApiKey),
     hasGeminiKey: Boolean(keys.geminiApiKey),
   });
+});
+
+const providerTestSchema = z.object({
+  provider: z.enum(["openai", "anthropic", "gemini"]),
+});
+
+app.post("/api/settings/test-connection", needAuth, async (req, res) => {
+  const parsed = providerTestSchema.safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Invalid provider" });
+  const provider = parsed.data.provider;
+  const keys = await getUserLlmKeys(String(req.session.githubUser!.id));
+  const key = provider === "openai" ? keys.openaiApiKey : provider === "anthropic" ? keys.anthropicApiKey : keys.geminiApiKey;
+  if (!key) return void res.status(400).json({ error: "Save this provider's API key before testing." });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const url = provider === "openai"
+      ? "https://api.openai.com/v1/models"
+      : provider === "anthropic"
+        ? "https://api.anthropic.com/v1/models?limit=1"
+        : "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1";
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: provider === "openai"
+        ? { Authorization: `Bearer ${key}` }
+        : provider === "anthropic"
+          ? { "x-api-key": key, "anthropic-version": "2023-06-01" }
+          : { "x-goog-api-key": key },
+    });
+    if (!response.ok) {
+      return void res.status(200).json({ connected: false, provider, message: response.status === 401 || response.status === 403 ? "Credentials rejected or insufficient permissions." : `Provider returned HTTP ${response.status}. Check service access.` });
+    }
+    return void res.json({ connected: true, provider, message: "API credential verified. Coding CLI/worker availability is separate." });
+  } catch {
+    return void res.status(200).json({ connected: false, provider, message: "Connection test failed or timed out." });
+  } finally {
+    clearTimeout(timeout);
+  }
 });
 
 const agentConfigSchema = z.object({
