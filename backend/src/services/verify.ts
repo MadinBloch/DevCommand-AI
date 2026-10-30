@@ -95,7 +95,7 @@ export async function runVerificationCommands(
   const ok = steps.length > 0 && steps.every((s) => s.ok);
   const failed = steps.filter((s) => !s.ok).map((s) => s.name);
   return {
-    ok: failed.length === 0,
+    ok,
     steps,
     summary: failed.length ? `Failed: ${failed.join(", ")}` : steps.length ? "All verification steps passed" : "No verification commands detected",
   };
