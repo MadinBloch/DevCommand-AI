@@ -132,6 +132,7 @@ export type AgentInfo = {
   version?: string;
   requires?: string[];
   executionState?: string;
+  selectedModel?: string;
 };
 
 export type ActivityLog = {
