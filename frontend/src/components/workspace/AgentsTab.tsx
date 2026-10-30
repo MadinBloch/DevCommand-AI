@@ -22,6 +22,15 @@ export function AgentsView({
 }) {
   const connected = agents.filter((a) => a.connected).length;
   const [busy, setBusy] = useState<string | null>(null);
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [feedback, setFeedback] = useState("");
+  const modelOptions: Record<string, string[]> = {
+    codex: ["default", "gpt-5-codex"],
+    claude: ["default", "claude-sonnet-4-5"],
+    gemini: ["default", "gemini-2.5-pro"],
+    antigravity: ["default"],
+    llm: ["default"],
+  };
 
   async function toggle(a: AgentInfo) {
     if (["human", "simulated", "testing"].includes(a.name)) return;
@@ -29,8 +38,22 @@ export function AgentsView({
     try {
       await api.setAgentEnabled(a.name, !(a.enabled ?? a.connected));
       onChanged?.();
-    } catch {
-      /* parent refresh will show state */
+    } catch (e: any) {
+      setFeedback(e.message || "Could not update agent");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveModel(agent: AgentInfo) {
+    setBusy(agent.name);
+    setFeedback("");
+    try {
+      await api.setAgentEnabled(agent.name, agent.enabled !== false, models[agent.name] || "default");
+      setFeedback(`Model preference saved for ${agent.displayName || agent.name}. Worker support must be verified separately.`);
+      onChanged?.();
+    } catch (e: any) {
+      setFeedback(e.message || "Could not save preference");
     } finally {
       setBusy(null);
     }
@@ -95,6 +118,7 @@ export function AgentsView({
         </p>
       </section>
 
+      {feedback && <div className="banner">{feedback}</div>}
       <div className="agent-grid">
         {agents.map((a) => {
           const live = Boolean(a.connected);
@@ -110,6 +134,18 @@ export function AgentsView({
               {a.requires?.length ? (
                 <p className="hint">requires: {a.requires.join(", ")}</p>
               ) : null}
+              {modelOptions[a.name] && (
+                <div className="form" style={{ marginTop: 10 }}>
+                  <label htmlFor={`model-${a.name}`}>Model preference</label>
+                  <select id={`model-${a.name}`} className="ui-input"
+                    value={models[a.name] || "default"}
+                    onChange={(e) => setModels((prev) => ({ ...prev, [a.name]: e.target.value }))}>
+                    {modelOptions[a.name].map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select>
+                  <Button variant="outline" size="sm" disabled={busy === a.name} onClick={() => void saveModel(a)}>Save preference</Button>
+                  <p className="hint">Preference is stored; agent CLI model selection requires worker integration.</p>
+                </div>
+              )}
               {!["human", "simulated", "testing"].includes(a.name) && (
                 <Button
                   variant="outline"
