@@ -25,6 +25,7 @@ export const api = {
   me: () => req<{ user: User | null }>("/api/auth/me"),
   logout: () => req("/api/auth/logout", { method: "POST" }),
   repos: () => req<Repo[]>("/api/github/repos"),
+  accountLoginStatus: () => req<{ statuses: Array<{ provider: string; installed: boolean; authenticated: boolean | null; message: string }>; scope: string; accountLoginInBrowser: boolean }>("/api/agents/account-login-status"),
   agents: () =>
     req<{
       agents: AgentInfo[];

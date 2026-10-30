@@ -22,6 +22,8 @@ import {
 import { getUserLlmKeys, persistGithubToken } from "./services/userKeys.js";
 import { encryptSecret, looksLikeOpenAiKey, maskKey } from "./services/secrets.js";
 import { startWorkers } from "./services/worker.js";
+import { probeCli } from "./services/cliProbe.js";
+import { runCli } from "./services/cliRunner.js";
 import { dockerWorkerEnabled } from "./services/workspace.js";
 import { getPrCiStatus } from "./services/ciStatus.js";
 import { writeAudit } from "./services/audit.js";
@@ -150,6 +152,25 @@ app.get("/api/agents", async (req, res) => {
     hasUserOpenAiKey: Boolean(userKeys.openaiApiKey),
     dockerWorker: cap.dockerWorker,
   });
+});
+
+app.get("/api/agents/account-login-status", needAuth, async (_req, res) => {
+  const binaries = [
+    { provider: "codex", binary: "codex" },
+    { provider: "claude", binary: "claude" },
+    { provider: "gemini", binary: "gemini" },
+  ] as const;
+  const statuses = await Promise.all(binaries.map(async ({ provider, binary }) => {
+    const probe = await probeCli(binary);
+    if (!probe.installed) return { provider, installed: false, authenticated: false, message: "CLI not installed on worker." };
+    if (provider !== "codex") return { provider, installed: true, authenticated: null, message: "Account login requires worker-side interactive setup. No authenticated status inferred from installation." };
+    const result = await runCli({ command: "codex", args: ["login", "status"], cwd: process.cwd(), timeoutMs: 10000 });
+    return { provider, installed: true, authenticated: result.code === 0 && !result.timedOut,
+      message: result.code === 0 && !result.timedOut
+        ? "Codex worker account is signed in. This is a host-level identity, not a per-user login."
+        : "Codex worker account not authenticated or login status could not be checked." };
+  }));
+  res.json({ statuses, scope: "worker-host", accountLoginInBrowser: false });
 });
 
 app.get("/api/overview", needAuth, async (req, res) => {
