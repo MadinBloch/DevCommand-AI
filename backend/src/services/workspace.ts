@@ -131,6 +131,14 @@ export async function createTaskWorkspace(opts: {
       args: [
         "run",
         "-d",
+        "--network", "none",
+        "--read-only",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--pids-limit", "128",
+        "--memory", "1g",
+        "--cpus", "1",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m",
         "--name",
         name,
         "-v",
@@ -203,25 +211,27 @@ export async function commitAndPushWorkspace(opts: {
     /* ignore */
   }
 
-  await runCli({
+  const commitResult = await runCli({
     command: "git",
     args: ["commit", "-m", opts.message.slice(0, 200)],
     cwd: opts.worktreeDir,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     timeoutMs: 60_000,
   });
+  if (commitResult.code !== 0 || commitResult.timedOut) throw new Error(redactSecrets("Git commit failed: " + commitResult.stderr));
 
   const sha = await git(opts.worktreeDir, ["rev-parse", "HEAD"]);
   const url = mirrorUrl(opts.token, opts.fullName);
 
   // Push task branch, then merge into feature branch on remote via push of feature tip
-  await runCli({
+  const taskPush = await runCli({
     command: "git",
     args: ["push", url, `HEAD:refs/heads/${opts.taskBranch}`],
     cwd: opts.worktreeDir,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     timeoutMs: 180_000,
   });
+  if (taskPush.code !== 0 || taskPush.timedOut) throw new Error(redactSecrets("Task branch push failed: " + taskPush.stderr));
 
   // Also update feature branch tip when fast-forwardable: push task branch as feature if first commits,
   // otherwise attempt merge locally onto feature and push.
@@ -240,17 +250,19 @@ export async function commitAndPushWorkspace(opts: {
   });
 
   if (mergeTry.code !== 0 && !String(mergeTry.stderr).includes("Already up to date")) {
-    // Conflict: leave task branch pushed for integration step
-    return { commitSha: sha, pushed: true };
+    // Conflict: preserve the task branch but never report feature integration as successful.
+    throw new Error(redactSecrets("Feature branch merge failed; task branch preserved for manual integration: " + mergeTry.stderr));
   }
 
-  await runCli({
+  const featurePush = await runCli({
     command: "git",
     args: ["push", url, `HEAD:refs/heads/${opts.featureBranch}`],
     cwd: opts.worktreeDir,
     timeoutMs: 180_000,
   });
-
+  if (featurePush.code !== 0 || featurePush.timedOut) {
+    throw new Error(redactSecrets("Feature branch integration push failed; task branch preserved: " + featurePush.stderr));
+  }
   return { commitSha: sha, pushed: true };
 }
 
