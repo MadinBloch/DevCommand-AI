@@ -1,4 +1,12 @@
-export type AgentName = "codex" | "antigravity" | "human" | "simulated" | "llm";
+export type AgentName =
+  | "codex"
+  | "claude"
+  | "gemini"
+  | "antigravity"
+  | "human"
+  | "simulated"
+  | "llm"
+  | "testing";
 
 export type AgentRunInput = {
   agent: AgentName | string;
@@ -13,6 +21,10 @@ export type AgentRunInput = {
   /** Per-user keys from Settings UI (preferred over server env). */
   openaiApiKey?: string | null;
   anthropicApiKey?: string | null;
+  geminiApiKey?: string | null;
+  subTaskId?: string;
+  featureRunId?: string;
+  workspacePath?: string | null;
 };
 
 export type AgentRunResult = {

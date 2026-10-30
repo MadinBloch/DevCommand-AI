@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  Activity,
   Bot,
   GitBranch,
   Github,
   KeyRound,
+  LayoutDashboard,
   Loader2,
   LogOut,
   Menu,
@@ -19,18 +21,23 @@ import { RepoChat } from "./chat/RepoChat";
 import { RunsList } from "./components/workspace/RunsTab";
 import { SettingsView } from "./components/workspace/SettingsTab";
 import { AgentsView } from "./components/workspace/AgentsTab";
+import { OverviewView } from "./components/workspace/OverviewTab";
+import { ActivityView } from "./components/workspace/ActivityTab";
+import { RunDetailView } from "./components/workspace/RunDetailLoader";
 
-type Page = "repos" | "chat" | "history" | "agents" | "settings";
+type Page = "overview" | "repos" | "chat" | "history" | "execution" | "agents" | "activity" | "settings";
 
-const NAV: Array<{ id: Exclude<Page, "chat">; label: string; icon: typeof GitBranch }> = [
+const NAV: Array<{ id: Exclude<Page, "chat" | "execution">; label: string; icon: typeof GitBranch }> = [
+  { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "repos", label: "Repositories", icon: GitBranch },
-  { id: "history", label: "History", icon: Workflow },
-  { id: "agents", label: "Agents", icon: Bot },
+  { id: "history", label: "Feature Runs", icon: Workflow },
+  { id: "agents", label: "AI Agents", icon: Bot },
+  { id: "activity", label: "Activity Logs", icon: Activity },
   { id: "settings", label: "Settings", icon: KeyRound },
 ];
 
 export default function App() {
-  const [page, setPage] = useState<Page>("repos");
+  const [page, setPage] = useState<Page>("overview");
   const [user, setUser] = useState<User | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [runs, setRuns] = useState<FeatureRun[]>([]);
@@ -39,8 +46,17 @@ export default function App() {
   const [llmPlanner, setLlmPlanner] = useState(false);
   const [llmCoder, setLlmCoder] = useState(false);
   const [canCommit, setCanCommit] = useState(false);
+  const [dockerWorker, setDockerWorker] = useState(false);
+  const [overviewStats, setOverviewStats] = useState({
+    runs: 0,
+    active: 0,
+    awaitingApproval: 0,
+    failed: 0,
+    agentsConnected: 0,
+  });
   const [activeRepo, setActiveRepo] = useState<Repo | null>(null);
   const [chatRunId, setChatRunId] = useState<string | null>(null);
+  const [executionRunId, setExecutionRunId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -58,10 +74,12 @@ export default function App() {
       setLlmPlanner(ag.llmPlanner);
       setLlmCoder(Boolean(ag.llmCoder));
       setCanCommit(Boolean(ag.canCommit));
+      setDockerWorker(Boolean(ag.dockerWorker));
       if (u) {
-        const [rr, rn] = await Promise.all([api.repos(), api.runs()]);
+        const [rr, rn, ov] = await Promise.all([api.repos(), api.runs(), api.overview()]);
         setRepos(rr);
         setRuns(rn);
+        setOverviewStats(ov.stats);
       }
     } catch (e: any) {
       setError(e.message || "API unavailable");
@@ -173,16 +191,19 @@ export default function App() {
               <Menu size={18} />
             </Button>
             <h1>
+              {page === "overview" && "Overview"}
               {page === "repos" && "Repositories"}
-              {page === "chat" && (activeRepo?.fullName || "Chat")}
-              {page === "history" && "History"}
-              {page === "agents" && "Agents"}
+              {page === "chat" && (activeRepo?.fullName || "Task Execution")}
+              {page === "history" && "Feature Runs"}
+              {page === "execution" && "Task Execution"}
+              {page === "agents" && "AI Agents"}
+              {page === "activity" && "Activity Logs"}
               {page === "settings" && "Settings"}
             </h1>
           </div>
           <div className="app-topbar-right">
             <Badge variant={canCommit ? "default" : "outline"}>
-              {canCommit ? "API ready" : "add OpenAI key"} · {agentMode}
+              {canCommit ? "agents ready" : "connect agents"} · {agentMode}
             </Badge>
             <Button variant="outline" onClick={bootstrap}>
               <RefreshCw size={15} /> Refresh
@@ -192,6 +213,26 @@ export default function App() {
 
         <div className={`app-content ${page === "chat" ? "app-content-flush" : ""}`}>
           {error && <div className="banner bad">{error}</div>}
+
+          {page === "overview" && (
+            <OverviewView
+              stats={overviewStats}
+              recentRuns={runs.slice(0, 8)}
+              agents={agents}
+              onOpenAgents={() => go("agents")}
+              onOpenRun={async (id) => {
+                try {
+                  const run = await api.run(id);
+                  setExecutionRunId(id);
+                  setPage("execution");
+                  const match = repos.find((r) => r.fullName === run.repoFullName);
+                  if (match) setActiveRepo(match);
+                } catch (e: any) {
+                  setError(e.message);
+                }
+              }}
+            />
+          )}
 
           {page === "repos" && (
             <div className="repo-home rise">
@@ -282,8 +323,10 @@ export default function App() {
               onOpen={async (id) => {
                 try {
                   const run = await api.run(id);
+                  setExecutionRunId(id);
+                  setPage("execution");
                   const match = repos.find((r) => r.fullName === run.repoFullName);
-                  if (match) openRepo(match, id);
+                  if (match) setActiveRepo(match);
                   else setError("Repo not in your writable list: " + run.repoFullName);
                 } catch (e: any) {
                   setError(e.message);
@@ -292,9 +335,29 @@ export default function App() {
             />
           )}
 
-          {page === "agents" && (
-            <AgentsView agents={agents} mode={agentMode} llmPlanner={llmPlanner} llmCoder={llmCoder} canCommit={canCommit} />
+          {page === "execution" && executionRunId && (
+            <RunDetailView
+              runId={executionRunId}
+              onBack={() => go("history")}
+              onOpenChat={() => {
+                if (activeRepo) openRepo(activeRepo, executionRunId);
+              }}
+            />
           )}
+
+          {page === "agents" && (
+            <AgentsView
+              agents={agents}
+              mode={agentMode}
+              llmPlanner={llmPlanner}
+              llmCoder={llmCoder}
+              canCommit={canCommit}
+              dockerWorker={dockerWorker}
+              onChanged={() => void bootstrap()}
+            />
+          )}
+
+          {page === "activity" && <ActivityView />}
 
           {page === "settings" && <SettingsView onSaved={() => void bootstrap()} />}
         </div>

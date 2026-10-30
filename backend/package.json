@@ -13,6 +13,7 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@openai/codex-sdk": "^0.166.0",
     "@prisma/client": "^6.7.0",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/cors": "^2.8.17",
@@ -27,6 +28,7 @@
     "express-session": "^1.18.1",
     "helmet": "^8.0.0",
     "pg": "^8.13.1",
+    "pg-boss": "^10.4.2",
     "zod": "^3.24.2"
   },
   "devDependencies": {

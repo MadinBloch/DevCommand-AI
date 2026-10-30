@@ -3,7 +3,7 @@ import type { RepoScan } from "./scanner.js";
 export type PlannedStep = {
   title: string;
   objective: string;
-  agent: "codex" | "antigravity" | "human";
+  agent: "codex" | "claude" | "gemini" | "antigravity" | "testing" | "human" | "llm";
   criteria: string[];
   dependsOnOrders: number[];
   generatedPrompt: string;
@@ -76,6 +76,8 @@ function heuristicPlan(goal: string, scan: RepoScan): PlannedStep[] {
     },
   ];
 
+  // Parallelizable backend + frontend when both apply (independent deps on scan step 0)
+  const backendIdx = draft.length;
   if (api || !ui) {
     draft.push({
       title: "Implement backend / domain changes",
@@ -89,11 +91,12 @@ function heuristicPlan(goal: string, scan: RepoScan): PlannedStep[] {
     });
   }
 
+  const frontendIdx = draft.length;
   if (ui || /full.?stack|end.?to.?end/i.test(goal)) {
     draft.push({
       title: "Implement UI / frontend updates",
       objective: "Ship the user-facing changes aligned with existing design patterns in the repo.",
-      agent: "antigravity",
+      agent: "gemini",
       criteria: [
         "UI reflects the requested feature",
         "Responsive and accessible enough for primary flows",
@@ -102,27 +105,29 @@ function heuristicPlan(goal: string, scan: RepoScan): PlannedStep[] {
     });
   }
 
-  if (security) {
+  const reviewIdx = draft.length;
+  if (security || api || ui) {
     draft.push({
-      title: "Security hardening pass",
-      objective: "Verify authz boundaries, secrets handling, and input validation for the change.",
-      agent: "codex",
+      title: "Code quality & security review",
+      objective: "Review authz boundaries, secrets handling, input validation, and code quality for the change.",
+      agent: "claude",
       criteria: [
         "Access control verified",
         "No secrets committed",
-        "Findings documented",
+        "Findings documented with concrete fixes",
       ],
     });
   }
 
+  const testIdx = draft.length;
   draft.push({
-    title: "Add / update regression tests",
-    objective: `Cover success and failure paths${scan.testCommand ? ` using \`${scan.testCommand}\`` : ""}.`,
-    agent: "codex",
+    title: "Run automated verification",
+    objective: `Execute project tests/lint/typecheck/build${scan.testCommand ? ` (prefer \`${scan.testCommand}\`)` : ""} and fix failures.`,
+    agent: "testing",
     criteria: [
-      "Relevant tests added or updated",
+      "Relevant test/lint/typecheck/build commands executed",
       "Actual command output recorded",
-      "Skipped checks disclosed",
+      "Failures assigned back with logs",
     ],
   });
 
@@ -141,7 +146,7 @@ function heuristicPlan(goal: string, scan: RepoScan): PlannedStep[] {
     draft.push({
       title: "Open PR & prepare deploy",
       objective: "Open a pull request from the feature branch and prepare deploy checklist after approval.",
-      agent: "codex",
+      agent: "antigravity",
       criteria: [
         "PR opened against default branch",
         "Deploy notes listed",
@@ -151,7 +156,20 @@ function heuristicPlan(goal: string, scan: RepoScan): PlannedStep[] {
   }
 
   return draft.map((step, i) => {
-    const dependsOnOrders = i === 0 ? [] : [i - 1];
+    let dependsOnOrders: number[] = [];
+    if (i === 0) dependsOnOrders = [];
+    else if (i === backendIdx || i === frontendIdx) dependsOnOrders = [0];
+    else if (i === reviewIdx) {
+      dependsOnOrders = [backendIdx, frontendIdx].filter((x) => x > 0 && x < reviewIdx);
+      if (!dependsOnOrders.length) dependsOnOrders = [0];
+    } else if (i === testIdx) {
+      dependsOnOrders = [reviewIdx > 0 ? reviewIdx : Math.max(backendIdx, frontendIdx, 0)].filter(
+        (x) => x >= 0 && x < testIdx
+      );
+      if (!dependsOnOrders.length) dependsOnOrders = i > 0 ? [i - 1] : [];
+    } else {
+      dependsOnOrders = [i - 1];
+    }
     return {
       ...step,
       dependsOnOrders,
@@ -178,8 +196,9 @@ async function llmPlan(goal: string, scan: RepoScan, keys?: LlmKeys): Promise<Pl
 
   const system = `You are DevCommand's planner. Return ONLY valid JSON array of steps.
 Each step: {title, objective, agent, criteria, dependsOnOrders}
-agent must be one of: codex, antigravity, human.
-Keep 4-7 steps. First step inspects, last steps include tests and human approval, then PR/deploy prep.
+agent must be one of: codex, claude, gemini, antigravity, testing, human, llm.
+Prefer parallel independent steps (backend=codex, frontend=gemini, review=claude, verify=testing).
+Keep 4-8 steps. First step inspects, include testing + human approval, then PR/deploy prep.
 dependsOnOrders is an array of earlier 0-based indexes.`;
 
   const user = `Goal: ${goal}\n\nRepo scan:\n${JSON.stringify(scan, null, 2)}`;
@@ -240,10 +259,8 @@ function normalizeLlmSteps(content: string, goal: string, scan: RepoScan): Plann
     const arr = Array.isArray(parsed) ? parsed : parsed.steps;
     if (!Array.isArray(arr) || !arr.length) return null;
     return arr.map((raw: any, i: number) => {
-      const agent =
-        raw.agent === "antigravity" || raw.agent === "human" || raw.agent === "codex"
-          ? raw.agent
-          : "codex";
+      const allowed = new Set(["codex", "claude", "gemini", "antigravity", "testing", "human", "llm"]);
+      const agent = allowed.has(String(raw.agent)) ? raw.agent : "codex";
       const criteria = Array.isArray(raw.criteria) ? raw.criteria.map(String) : ["Complete the objective"];
       const title = String(raw.title || `Step ${i + 1}`);
       const objective = String(raw.objective || goal);

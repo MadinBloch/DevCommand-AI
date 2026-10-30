@@ -33,27 +33,58 @@ export const api = {
       llmCoder?: boolean;
       canCommit?: boolean;
       hasUserOpenAiKey?: boolean;
+      dockerWorker?: boolean;
     }>("/api/agents"),
+  overview: () =>
+    req<{
+      stats: {
+        runs: number;
+        active: number;
+        awaitingApproval: number;
+        failed: number;
+        agentsConnected: number;
+      };
+      recentRuns: FeatureRun[];
+      agents: AgentInfo[];
+    }>("/api/overview"),
+  activity: () => req<{ logs: ActivityLog[] }>("/api/activity"),
   settings: () =>
     req<{
       openaiApiKeyMasked: string | null;
       hasOpenAiKey: boolean;
       anthropicApiKeyMasked: string | null;
       hasAnthropicKey: boolean;
+      geminiApiKeyMasked: string | null;
+      hasGeminiKey: boolean;
       serverHasOpenAiKey: boolean;
+      dockerWorker?: boolean;
       login: string;
     }>("/api/settings"),
   saveSettings: (body: {
     openaiApiKey?: string | null;
     anthropicApiKey?: string | null;
+    geminiApiKey?: string | null;
     clearOpenAiKey?: boolean;
     clearAnthropicKey?: boolean;
-  }) => req<{ ok: boolean; hasOpenAiKey: boolean; openaiApiKeyMasked: string | null }>("/api/settings", {
-    method: "PUT",
-    body: JSON.stringify(body),
-  }),
+    clearGeminiKey?: boolean;
+  }) =>
+    req<{
+      ok: boolean;
+      hasOpenAiKey: boolean;
+      openaiApiKeyMasked: string | null;
+      hasAnthropicKey: boolean;
+      anthropicApiKeyMasked: string | null;
+      hasGeminiKey: boolean;
+      geminiApiKeyMasked: string | null;
+    }>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  setAgentEnabled: (provider: string, enabled: boolean) =>
+    req(`/api/agents/${provider}`, { method: "PUT", body: JSON.stringify({ provider, enabled }) }),
   runs: () => req<FeatureRun[]>("/api/runs"),
   run: (id: string) => req<FeatureRunDetail>(`/api/runs/${id}`),
+  runCi: (id: string) => req<{ ci: { state: string; summary: string }; prUrl: string | null }>(`/api/runs/${id}/ci`),
   createRun: (body: { repoFullName: string; title: string; goal: string; autoStart?: boolean }) =>
     req<{ run: FeatureRunDetail }>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
   startRun: (id: string) => req<{ run: FeatureRunDetail }>(`/api/runs/${id}/start`, { method: "POST" }),
@@ -88,7 +119,26 @@ export type Repo = {
   permissions: { push: boolean; admin: boolean };
 };
 
-export type AgentInfo = { name: string; available: boolean; reason: string | null };
+export type AgentInfo = {
+  name: string;
+  displayName?: string;
+  available: boolean;
+  connected?: boolean;
+  enabled?: boolean;
+  mode?: string;
+  reason: string | null;
+  version?: string;
+  requires?: string[];
+  executionState?: string;
+};
+
+export type ActivityLog = {
+  id: string;
+  action: string;
+  detail: string | null;
+  featureRunId: string | null;
+  createdAt: string;
+};
 
 export type SubTask = {
   id: string;
